@@ -220,6 +220,8 @@ def run(args, device, data):
 
     print('Avg epoch time: {}'.format(avg / (epoch - 4)))
 
+
+
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser("multi-gpu training")
     argparser.add_argument('--gpu', type=int, default=0,

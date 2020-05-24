@@ -134,10 +134,10 @@ def load_rw_data(classes_to_load,p_train,max_test):
         if nclasses>=classes_to_load:
             break
         nclasses += 10
-        print(f)
+        #print(f)
         i = pd.read_csv(f.__str__())
         df= df.append(i)
-        print(len(df))
+        #print(len(df))
         
     #df = pd.read_csv('C:\code\geosim\simchunk0.csv')
     df = df.iloc[:,1:]
@@ -219,6 +219,8 @@ class SimilarityEmbedder:
 
         self.g, self.embed, self.labels, self.train_mask, self.test_mask, self.nclasses, self.is_relevant_mask = rw_data
 
+        print(self.g)
+
         self.embedding_dim = args.embedding_dim
         self.distance = args.distance_metric
         self.device = args.device
@@ -247,7 +249,7 @@ class SimilarityEmbedder:
                             batch_size=args.batch_size,
                             collate_fn=self.sampler.sample_blocks,
                             shuffle=True,
-                            drop_last=False,
+                            drop_last=True,
                             num_workers=args.num_workers)
 
         if self.embedding_dim == 2:
@@ -264,23 +266,20 @@ class SimilarityEmbedder:
         idx1 = []
         idx2 = []
         target = []
-        labels_compared = []
         for i,l in enumerate(labelsnp):
-            shared_labels = [(i,j) for j,other in enumerate(labelsnp) if other==l and (j,i) not in labels_compared and i!=j and self.train_mask[j]]
-            unshared_labels = [(i,j) for j,other in enumerate(labelsnp) if other!=l and (j,i) not in labels_compared and i!=j and self.train_mask[j]]
-            for _,j in shared_labels:
-                idx1.append(i)
-                idx2.append(j)
-                target.append(1)
-            for _,j in unshared_labels:
-                idx1.append(i)
-                idx2.append(j)
-                target.append(-1)
+            ids = list(range(len(labelsnp)))
+            for j,other in zip(ids[i+1:],labelsnp[i+1:]):
+                if other==l:
+                    idx1.append(i)
+                    idx2.append(j)
+                    target.append(1)
+                else:
+                    idx1.append(i)
+                    idx2.append(j)
+                    target.append(-1)
 
+        return idx1, idx2, target
 
-            labels_compared += shared_labels
-
-        return idx1,idx2,target
 
     def setup_pairwise_eval_tensors(self):
         test_labels = self.labels[self.test_mask].detach().numpy().tolist()
@@ -288,7 +287,7 @@ class SimilarityEmbedder:
 
         self.test_idx = []
         self.test_idx2 = []
-        for i,test_label in enumerate(labelsnp):
+        for i,test_label in enumerate(tqdm.tqdm(labelsnp)):
             if not self.test_mask[i]:
                 continue
             else:
@@ -347,18 +346,17 @@ class SimilarityEmbedder:
                 in_top5.append(test_label in [candidate_label for candidate_label,_ in distances])
                 in_top1.append(test_label == distances[0][0])
 
-        #print(top_5)
-        #print(in_top5)
-        #print(in_top1)
         return np.mean(in_top5), np.mean(in_top1)
 
-    def pairwise_distance_loss(self,embeddings,labels):
+    def pairwise_distance_loss(self,embeddings,seeds,labels):
         
         labels = labels.cpu().numpy()
         batch_relevant_nodes = [i for i,l in enumerate(labels) if l!=-1]
         embeddings = embeddings[batch_relevant_nodes]
         labels = labels[batch_relevant_nodes]
         idx1,idx2,target = self.setup_pairwise_loss_tensors(labels)
+
+
 
         losstarget = th.tensor(target).to(self.device)
 
@@ -386,6 +384,7 @@ class SimilarityEmbedder:
             loss_neg = th.mean(th.max(th.zeros(input1_neg.shape[0]).cuda(),0.25-th.sum(F.mse_loss(input1_neg,input2_neg,reduce=False),dim=1)))
 
             loss = loss_pos + loss_neg
+
         else:
             raise ValueError('distance {} is not implemented'.format(self.distance))
 
@@ -420,18 +419,21 @@ class SimilarityEmbedder:
 
                 embeddings = self.net(blocks, batch_inputs)
 
-                loss = self.pairwise_distance_loss(embeddings,batch_labels)
+                loss = self.pairwise_distance_loss(embeddings,seeds,batch_labels)
                 
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+
+                print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f}".format(
+                        epoch, step, loss.item()))
             
                
             if epoch % test_every_n_epochs == 0 or epoch==epochs:
                 testtop5,testtop1 = self.evaluate()
 
                 print("Epoch {:05d} | Loss {:.8f} | Test Top5 {:.4f} | Test Top1 {:.4f}".format(
-                        epoch, loss.item(),testtop5,testtop1))
+                        epoch, loss.item(),testtop5,testtop1))                
 
 
         if self.embedding_dim == 2:
@@ -465,29 +467,30 @@ if __name__=="__main__":
     argparser.add_argument('--device', type=str, default='cuda',
         help="Device to use for training")
     argparser.add_argument('--num-epochs', type=int, default=500)
-    argparser.add_argument('--num-hidden', type=int, default=32)
+    argparser.add_argument('--num-hidden', type=int, default=64)
     argparser.add_argument('--num-layers', type=int, default=2)
     argparser.add_argument('--fan-out', type=str, default='10,25')
-    argparser.add_argument('--batch-size', type=int, default=20)
-    argparser.add_argument('--test-every', type=int, default=10)
-    argparser.add_argument('--lr', type=float, default=1e-4)
+    argparser.add_argument('--batch-size', type=int, default=1000)
+    argparser.add_argument('--test-every', type=int, default=25)
+    argparser.add_argument('--lr', type=float, default=1e-3)
     argparser.add_argument('--dropout', type=float, default=0)
     argparser.add_argument('--num-workers', type=int, default=0,
         help="Number of sampling processes. Use 0 for no extra process.")
-    argparser.add_argument('--n-classes', type=int, default=40)
+    argparser.add_argument('--n-classes', type=int, default=1000)
     argparser.add_argument('--p-train', type=float, default=1,
         help="Proportion of labels known at training time")
     argparser.add_argument('--max-test-labels', type=int, default=500,
         help="Maximum number of labels to include in test set, helps with performance \
 since currently relying on all pairwise search for testing.")
-    argparser.add_argument('--distance-metric', type=str, default='mse',
-        help="Distance metric to use in triplet loss function and nearest neighbors inference, MSE or cosine.")
-    argparser.add_argument('--embedding-dim',type=int,default=2,help="Dimensionality of the final embedding")
+    argparser.add_argument('--distance-metric', type=str, default='cosine',
+        help="Distance metric to use in triplet loss function and nearest neighbors inference, mse or cosine.")
+    argparser.add_argument('--embedding-dim',type=int,default=32,help="Dimensionality of the final embedding")
     args = argparser.parse_args()
 
 
 
 
+    print('loading data...')
     rw_data = load_rw_data(args.n_classes,args.p_train,args.max_test_labels)
     trainer = SimilarityEmbedder(rw_data,args)
     trainer.train(args.num_epochs,args.test_every)

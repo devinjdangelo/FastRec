@@ -41,7 +41,6 @@ def genSamples(npaths,nsteps):
 def downSample(paths,nsamples=2,maxpts=100):
     df = pd.DataFrame(columns=['sample','id','time','lon','lat'])
     for sample in range(nsamples):
-        print(sample)
         #ndpts = (1-np.random.power(5,size=paths.shape[0])) * maxpts
         ndpts = [100 for x in range(len(paths))]
         for i,path in enumerate(paths):
@@ -58,10 +57,10 @@ def simchunk(i):
     #print(f'sim chunk {i} of 6000...')
     npaths = 10
     nsteps = 5000
-    test = genSamples(npaths,nsteps)
+    paths = genSamples(npaths,nsteps)
     nsamples = random.randint(1,3)
-    df = downSample(test,nsamples=nsamples)
-    df.to_csv('/home/ddangelo/dgl/simchunks{i}.csv'.format(i=i))
+    df = downSample(paths,nsamples=nsamples)
+    df.to_csv('./chunks/simchunks{i}.csv'.format(i=i))
 
 if __name__=="__main__":
     

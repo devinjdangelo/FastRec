@@ -49,3 +49,4 @@ RUN pip3 install --upgrade pip
 RUN pip3 install numpy pandas matplotlib networkx geohash2 tqdm sklearn
 RUN pip3 install torch==1.5.0+cu101 torchvision==0.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html 
 RUN pip3 install dgl-cu101     # For CUDA 10.1 Build
+RUN pip3 install imageio

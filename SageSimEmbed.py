@@ -17,6 +17,7 @@ import itertools as it
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import tqdm
+import imageio
 
 import dgl
 import dgl.function as fn
@@ -126,7 +127,7 @@ def load_rw_data(classes_to_load,p_train,max_test):
     """Loads random walk data and converts it into a DGL graph"""
 
 
-    p = pathlib.Path('/home/ddangelo/dgl')
+    p = pathlib.Path('./chunks')
     files = p.glob('simchunks*.csv')
     df = pd.DataFrame()
     nclasses = 0
@@ -219,6 +220,7 @@ class SimilarityEmbedder:
 
         self.g, self.embed, self.labels, self.train_mask, self.test_mask, self.nclasses, self.is_relevant_mask = rw_data
 
+        self.ptrain = args.p_train
         print(self.g)
 
         self.embedding_dim = args.embedding_dim
@@ -392,6 +394,11 @@ class SimilarityEmbedder:
 
     def train(self,epochs,test_every_n_epochs):
 
+        loss_history = []
+        top5_history = []
+        top1_history = []
+
+
         dur = []
         if self.embedding_dim == 2:
             self.all_embeddings = []
@@ -428,27 +435,62 @@ class SimilarityEmbedder:
                 print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f}".format(
                         epoch, step, loss.item()))
             
-               
+            loss_history.append(loss.item())
             if epoch % test_every_n_epochs == 0 or epoch==epochs:
                 testtop5,testtop1 = self.evaluate()
+                top5_history.append(testtop5)
+                top1_history.append(testtop1)
 
                 print("Epoch {:05d} | Loss {:.8f} | Test Top5 {:.4f} | Test Top1 {:.4f}".format(
                         epoch, loss.item(),testtop5,testtop1))                
 
-
+        self.log_histories(loss_history,top5_history,top1_history,test_every_n_epochs)
         if self.embedding_dim == 2:
             self.animate()
+
+    def log_histories(self,loss,top5,top1,test_every_n_epochs):
+        loss_epochs = list(range(len(loss)))
+        test_epochs = list(range(0,len(loss),test_every_n_epochs))
+
+        fig = plt.figure()
+        ax = fig.subplots()
+        plt.title('Triplet {} Loss by Training Epoch'.format(self.distance))
+        fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
+        plt.scatter(loss_epochs,loss)
+        plt.plot(loss_epochs,loss)
+        fig.set_size_inches(7, 8, forward=True)
+        plt.savefig('./Results/loss{}_{}_{}_{}_{}.png'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain))
+        plt.close()
+
+        fig = plt.figure()
+        ax = fig.subplots()
+        plt.title('Test Inference Accuracy'.format(self.distance))
+        fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, {} frac labels known at training time.'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
+        plt.scatter(test_epochs,top5)
+        plt.plot(test_epochs,top5,label='Top 5 Accuracy')
+        plt.scatter(test_epochs,top1,label='Top 1 Accuracy')
+        plt.legend(loc="lower right")
+        plt.plot(test_epochs,top1)
+        fig.set_size_inches(7, 8, forward=True)
+        plt.savefig('./Results/topn{}_{}_{}_{}_{}.png'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain))
+        plt.close()
+
 
     def animate(self):
 
         labelsnp = self.labels.detach().numpy().tolist()
-        for i,embedding in enumerate(self.all_embeddings):
+        for i,embedding in enumerate(tqdm.tqdm(self.all_embeddings)):
             data = embedding.cpu().numpy()
             fig = plt.figure(dpi=150)
             fig.clf()
             ax = fig.subplots()
             #ax.set_xlim([-1,1])
             #ax.set_ylim([-1,1])
+            plt.title('Epoch {}'.format(i))
 
 
             plt.scatter(data[:,0],data[:,1])
@@ -457,8 +499,20 @@ class SimilarityEmbedder:
                     continue
                 ax.annotate(label,(data[j,0],data[j,1]))
             #pos = draw(i)  # draw the prediction of the first epoch
-            plt.savefig('./ims/step{n}.png'.format(n=i))
+            plt.savefig('./ims/{n}.png'.format(n=i))
             plt.close()
+
+        imagep = pathlib.Path('./ims/')
+        images = imagep.glob('*.png')
+        images = list(images)
+        images.sort(key=lambda x : int(str(x).split('/')[-1].split('.')[0]))
+        with imageio.get_writer('./Results/training_{}_{}_{}_{}_{}.gif'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), mode='I') as writer:
+            for image in images:
+                data = imageio.imread(image.__str__())
+                writer.append_data(data)
+
+
 
 
 if __name__=="__main__":
@@ -466,25 +520,25 @@ if __name__=="__main__":
     argparser = argparse.ArgumentParser("GraphSage training")
     argparser.add_argument('--device', type=str, default='cuda',
         help="Device to use for training")
-    argparser.add_argument('--num-epochs', type=int, default=500)
+    argparser.add_argument('--num-epochs', type=int, default=200)
     argparser.add_argument('--num-hidden', type=int, default=64)
     argparser.add_argument('--num-layers', type=int, default=2)
     argparser.add_argument('--fan-out', type=str, default='10,25')
-    argparser.add_argument('--batch-size', type=int, default=1000)
-    argparser.add_argument('--test-every', type=int, default=25)
-    argparser.add_argument('--lr', type=float, default=1e-3)
+    argparser.add_argument('--batch-size', type=int, default=20)
+    argparser.add_argument('--test-every', type=int, default=1)
+    argparser.add_argument('--lr', type=float, default=1e-2)
     argparser.add_argument('--dropout', type=float, default=0)
     argparser.add_argument('--num-workers', type=int, default=0,
         help="Number of sampling processes. Use 0 for no extra process.")
-    argparser.add_argument('--n-classes', type=int, default=1000)
+    argparser.add_argument('--n-classes', type=int, default=20)
     argparser.add_argument('--p-train', type=float, default=1,
         help="Proportion of labels known at training time")
     argparser.add_argument('--max-test-labels', type=int, default=500,
         help="Maximum number of labels to include in test set, helps with performance \
 since currently relying on all pairwise search for testing.")
-    argparser.add_argument('--distance-metric', type=str, default='cosine',
+    argparser.add_argument('--distance-metric', type=str, default='mse',
         help="Distance metric to use in triplet loss function and nearest neighbors inference, mse or cosine.")
-    argparser.add_argument('--embedding-dim',type=int,default=32,help="Dimensionality of the final embedding")
+    argparser.add_argument('--embedding-dim',type=int,default=2,help="Dimensionality of the final embedding")
     args = argparser.parse_args()
 
 

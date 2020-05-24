@@ -459,7 +459,9 @@ class SimilarityEmbedder:
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
         plt.scatter(loss_epochs,loss)
         plt.plot(loss_epochs,loss)
-        fig.set_size_inches(7, 8, forward=True)
+        fig.set_size_inches(7, 7, forward=True)
+        plt.xlabel('epoch')
+        plt.ylabel('loss')
         plt.savefig('./Results/loss{}_{}_{}_{}_{}.png'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain))
         plt.close()
@@ -467,14 +469,16 @@ class SimilarityEmbedder:
         fig = plt.figure()
         ax = fig.subplots()
         plt.title('Test Inference Accuracy'.format(self.distance))
-        fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, {} frac labels known at training time.'.format(
+        fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
         plt.scatter(test_epochs,top5)
         plt.plot(test_epochs,top5,label='Top 5 Accuracy')
         plt.scatter(test_epochs,top1,label='Top 1 Accuracy')
         plt.legend(loc="lower right")
         plt.plot(test_epochs,top1)
-        fig.set_size_inches(7, 8, forward=True)
+        fig.set_size_inches(7, 7, forward=True)
+        plt.xlabel('epoch')
+        plt.ylabel('accuracy')
         plt.savefig('./Results/topn{}_{}_{}_{}_{}.png'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain))
         plt.close()
@@ -520,25 +524,25 @@ if __name__=="__main__":
     argparser = argparse.ArgumentParser("GraphSage training")
     argparser.add_argument('--device', type=str, default='cuda',
         help="Device to use for training")
-    argparser.add_argument('--num-epochs', type=int, default=200)
+    argparser.add_argument('--num-epochs', type=int, default=400)
     argparser.add_argument('--num-hidden', type=int, default=64)
     argparser.add_argument('--num-layers', type=int, default=2)
     argparser.add_argument('--fan-out', type=str, default='10,25')
-    argparser.add_argument('--batch-size', type=int, default=20)
-    argparser.add_argument('--test-every', type=int, default=1)
+    argparser.add_argument('--batch-size', type=int, default=1000)
+    argparser.add_argument('--test-every', type=int, default=25)
     argparser.add_argument('--lr', type=float, default=1e-2)
     argparser.add_argument('--dropout', type=float, default=0)
     argparser.add_argument('--num-workers', type=int, default=0,
         help="Number of sampling processes. Use 0 for no extra process.")
-    argparser.add_argument('--n-classes', type=int, default=20)
+    argparser.add_argument('--n-classes', type=int, default=10000)
     argparser.add_argument('--p-train', type=float, default=1,
         help="Proportion of labels known at training time")
     argparser.add_argument('--max-test-labels', type=int, default=500,
         help="Maximum number of labels to include in test set, helps with performance \
 since currently relying on all pairwise search for testing.")
-    argparser.add_argument('--distance-metric', type=str, default='mse',
+    argparser.add_argument('--distance-metric', type=str, default='cosine',
         help="Distance metric to use in triplet loss function and nearest neighbors inference, mse or cosine.")
-    argparser.add_argument('--embedding-dim',type=int,default=2,help="Dimensionality of the final embedding")
+    argparser.add_argument('--embedding-dim',type=int,default=32,help="Dimensionality of the final embedding")
     args = argparser.parse_args()
 
 

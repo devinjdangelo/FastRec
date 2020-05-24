@@ -64,7 +64,7 @@ def simchunk(i):
 
 if __name__=="__main__":
     
-    with Pool(8) as pp:
+    with Pool(multiprocessing.cpu_count()) as pp:
         pp.map(simchunk,range(2000))
 
     

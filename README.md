@@ -33,6 +33,6 @@ Next, test with 10k classes (~180k nodes and 1.3m edges). This graph is too larg
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_32_cosine_1.png" alt="drawing" width="500"/>
 
-Finally, repeat with only 25% of node classes known at training time. This is now semi-supervised training. 
+Finally, repeat with only 50% of node classes known at training time. This is now semi-supervised training. 
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_20_2_mse_1.0.png" alt="drawing" width="500"/>
+[TODO]

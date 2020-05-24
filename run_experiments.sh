@@ -13,4 +13,4 @@ python3 SageSimEmbed.py \
 python3 SageSimEmbed.py \
 --num-epochs 400 --batch-size 1000 \
 --test-every 25 --lr .01 --n-classes 10000 \
---p-train 0.25 --distance-metric cosine --embedding-dim 32
+--p-train 0.5 --distance-metric cosine --embedding-dim 32

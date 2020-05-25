@@ -110,16 +110,17 @@ class SAGE(nn.Module):
                  n_classes,
                  n_layers,
                  activation,
-                 dropout):
+                 dropout,
+                 agg_type):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
         self.n_classes = n_classes
         self.layers = nn.ModuleList()
-        self.layers.append(dglnn.SAGEConv(in_feats, n_hidden, 'mean'))
+        self.layers.append(dglnn.SAGEConv(in_feats, n_hidden, agg_type))
         for i in range(1, n_layers - 1):
-            self.layers.append(dglnn.SAGEConv(n_hidden, n_hidden, 'mean'))
-        self.layers.append(dglnn.SAGEConv(n_hidden, n_classes, 'mean'))
+            self.layers.append(dglnn.SAGEConv(n_hidden, n_hidden, agg_type))
+        self.layers.append(dglnn.SAGEConv(n_hidden, n_classes, agg_type))
         self.dropout = nn.Dropout(dropout)
         self.activation = activation
 
@@ -296,7 +297,7 @@ class SimilarityEmbedder:
 
 
         self.nx_g = self.g.to_networkx().to_undirected()
-        self.net = SAGE(256, args.num_hidden, args.embedding_dim, args.num_layers, F.relu, args.dropout)
+        self.net = SAGE(256, args.num_hidden, args.embedding_dim, args.num_layers, F.relu, args.dropout, args.agg_type)
         self.net.to(self.device)
         self.features = self.embed.weight
         self.features.to(self.device)
@@ -496,25 +497,32 @@ class SimilarityEmbedder:
                 # output their embeddings based on their neighbors...
                 # the neighbors are the inputs in the sense that they are what we
                 # use to generate the embedding for the seeds.
-                sup_input_nodes = sup_blocks[0].srcdata[dgl.NID]
-                sup_seeds = sup_blocks[-1].dstdata[dgl.NID]
+                if self.sup_weight>0:
+                    sup_input_nodes = sup_blocks[0].srcdata[dgl.NID]
+                    sup_seeds = sup_blocks[-1].dstdata[dgl.NID]
 
-                sup_batch_inputs = self.g.ndata['features'][sup_input_nodes].to(self.device)
-                sup_batch_labels = self.labels[sup_seeds].to(self.device)
+                    sup_batch_inputs = self.g.ndata['features'][sup_input_nodes].to(self.device)
+                    sup_batch_labels = self.labels[sup_seeds].to(self.device)
 
-                sup_embeddings = self.net(sup_blocks, sup_batch_inputs)
+                    sup_embeddings = self.net(sup_blocks, sup_batch_inputs)
 
-                sup_loss = self.pairwise_distance_loss(sup_embeddings,sup_seeds,sup_batch_labels)
+                    sup_loss = self.pairwise_distance_loss(sup_embeddings,sup_seeds,sup_batch_labels)
 
-                unsup_input_nodes = unsup_blocks[0].srcdata[dgl.NID]
-                unsup_seeds = unsup_blocks[-1].dstdata[dgl.NID]
+                if self.sup_weight < 1:
+                    unsup_input_nodes = unsup_blocks[0].srcdata[dgl.NID]
+                    unsup_seeds = unsup_blocks[-1].dstdata[dgl.NID]
 
-                unsup_batch_inputs = self.g.ndata['features'][unsup_input_nodes].to(self.device)
+                    unsup_batch_inputs = self.g.ndata['features'][unsup_input_nodes].to(self.device)
 
-                unsup_embeddings =self.net(unsup_blocks,unsup_batch_inputs)
-                unsup_loss = self.unsup_loss(unsup_embeddings, pos_graph, neg_graph)
+                    unsup_embeddings =self.net(unsup_blocks,unsup_batch_inputs)
+                    unsup_loss = self.unsup_loss(unsup_embeddings, pos_graph, neg_graph)
 
-                loss = self.sup_weight * sup_loss + (1 - self.sup_weight) * unsup_loss
+                if self.sup_weight==1:
+                    loss = sup_loss 
+                elif self.sup_weight==0:
+                    loss = unsup_loss
+                else:
+                    loss = self.sup_weight * sup_loss + (1 - self.sup_weight) * unsup_loss
                 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -534,7 +542,7 @@ class SimilarityEmbedder:
 
         self.log_histories(loss_history,top5_history,top1_history,test_every_n_epochs)
         if self.embedding_dim == 2:
-            self.animate()
+            self.animate(test_every_n_epochs)
 
     def log_histories(self,loss,top5,top1,test_every_n_epochs):
         loss_epochs = list(range(len(loss)))
@@ -572,7 +580,7 @@ class SimilarityEmbedder:
         plt.close()
 
 
-    def animate(self):
+    def animate(self,test_every_n_epochs):
 
         labelsnp = self.labels.detach().numpy().tolist()
         for i,embedding in enumerate(tqdm.tqdm(self.all_embeddings)):
@@ -582,7 +590,7 @@ class SimilarityEmbedder:
             ax = fig.subplots()
             #ax.set_xlim([-1,1])
             #ax.set_ylim([-1,1])
-            plt.title('Epoch {}'.format(i))
+            plt.title('Epoch {}'.format(i*test_every_n_epochs))
 
 
             plt.scatter(data[:,0],data[:,1])
@@ -616,6 +624,7 @@ if __name__=="__main__":
     argparser.add_argument('--num-hidden', type=int, default=64)
     argparser.add_argument('--num-layers', type=int, default=2)
     argparser.add_argument('--fan-out', type=str, default='10,25')
+    argparser.add_argument('--agg-type', type=str, default='mean')
     argparser.add_argument('--batch-size', type=int, default=1000)
     argparser.add_argument('--test-every', type=int, default=25)
     argparser.add_argument('--lr', type=float, default=1e-2)

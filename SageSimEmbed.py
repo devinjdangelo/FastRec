@@ -30,7 +30,58 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+class NegativeSampler(object):
+    def __init__(self, g):
+        self.weights = g.in_degrees().float() ** 0.75
 
+    def __call__(self, num_samples):
+        return self.weights.multinomial(num_samples, replacement=True)
+
+class UnsupervisedNeighborSampler(object):
+    def __init__(self, g, fanouts, num_negs):
+        self.g = g
+        self.fanouts = fanouts
+        self.neg_sampler = NegativeSampler(g)
+        self.num_negs = num_negs
+
+    def sample_blocks(self, seed_edges):
+        n_edges = len(seed_edges)
+        seed_edges = th.LongTensor(np.asarray(seed_edges))
+        heads, tails = self.g.find_edges(seed_edges)
+        neg_tails = self.neg_sampler(self.num_negs * n_edges)
+        neg_heads = heads.view(-1, 1).expand(n_edges, self.num_negs).flatten()
+
+        # Maintain the correspondence between heads, tails and negative tails as two
+        # graphs.
+        # pos_graph contains the correspondence between each head and its positive tail.
+        # neg_graph contains the correspondence between each head and its negative tails.
+        # Both pos_graph and neg_graph are first constructed with the same node space as
+        # the original graph.  Then they are compacted together with dgl.compact_graphs.
+        pos_graph = dgl.graph((heads, tails), num_nodes=self.g.number_of_nodes())
+        neg_graph = dgl.graph((neg_heads, neg_tails), num_nodes=self.g.number_of_nodes())
+        pos_graph, neg_graph = dgl.compact_graphs([pos_graph, neg_graph])
+
+        # Obtain the node IDs being used in either pos_graph or neg_graph.  Since they
+        # are compacted together, pos_graph and neg_graph share the same compacted node
+        # space.
+        seeds = pos_graph.ndata[dgl.NID]
+        blocks = []
+        for fanout in self.fanouts:
+            # For each seed node, sample ``fanout`` neighbors.
+            frontier = dgl.sampling.sample_neighbors(self.g, seeds, fanout, replace=True)
+            # Remove all edges between heads and tails, as well as heads and neg_tails.
+            _, _, edge_ids = frontier.edge_ids(
+                th.cat([heads, tails, neg_heads, neg_tails]),
+                th.cat([tails, heads, neg_tails, neg_heads]),
+                return_uv=True)
+            frontier = dgl.remove_edges(frontier, edge_ids)
+            # Then we compact the frontier into a bipartite graph for message passing.
+            block = dgl.to_block(frontier, seeds)
+            # Obtain the seed nodes for next layer.
+            seeds = block.srcdata[dgl.NID]
+
+            blocks.insert(0, block)
+        return pos_graph, neg_graph, blocks
 
 
 class NeighborSampler(object):
@@ -122,6 +173,22 @@ class SAGE(nn.Module):
 
             x = y
         return y
+
+class CrossEntropyLoss(nn.Module):
+    def forward(self, block_outputs, pos_graph, neg_graph):
+        with pos_graph.local_scope():
+            pos_graph.ndata['h'] = block_outputs
+            pos_graph.apply_edges(fn.u_dot_v('h', 'h', 'score'))
+            pos_score = pos_graph.edata['score']
+        with neg_graph.local_scope():
+            neg_graph.ndata['h'] = block_outputs
+            neg_graph.apply_edges(fn.u_dot_v('h', 'h', 'score'))
+            neg_score = neg_graph.edata['score']
+
+        score = th.cat([pos_score, neg_score])
+        label = th.cat([th.ones_like(pos_score), th.zeros_like(neg_score)]).long()
+        loss = F.binary_cross_entropy_with_logits(score, label.float())
+        return loss
     
 def load_rw_data(classes_to_load,p_train,max_test):
     """Loads random walk data and converts it into a DGL graph"""
@@ -237,8 +304,8 @@ class SimilarityEmbedder:
         self.labels.to(self.device)
         self.optimizer = th.optim.Adam(it.chain(self.net.parameters(),self.embed.parameters()), lr=args.lr)
 
-        self.sampler = NeighborSampler(self.g, [int(fanout) for fanout in args.fan_out.split(',')])
-
+        self.sup_sampler = NeighborSampler(self.g, [int(fanout) for fanout in args.fan_out.split(',')])
+        self.unsup_sampler = UnsupervisedNeighborSampler(self.g, [int(fanout) for fanout in args.fan_out.split(',')],args.neg_samples)
 
         self.train_nid = th.LongTensor(np.nonzero(self.train_mask)[0])
         self.test_nid = th.LongTensor(np.nonzero(self.test_mask)[0])
@@ -246,10 +313,17 @@ class SimilarityEmbedder:
         self.test_mask = th.BoolTensor(self.test_mask)
 
         self.batch_size = args.batch_size
+        self.sup_weight = args.sup_weight
+
+        self.unsup_loss = CrossEntropyLoss()
+        self.unsup_loss.to(self.device)
+
+
+        cf = lambda i : (self.sup_sampler.sample_blocks(i), self.unsup_sampler.sample_blocks(i))
         self.dataloader = DataLoader(
                             dataset=self.train_nid.numpy(),
                             batch_size=args.batch_size,
-                            collate_fn=self.sampler.sample_blocks,
+                            collate_fn=cf,
                             shuffle=True,
                             drop_last=True,
                             num_workers=args.num_workers)
@@ -410,7 +484,11 @@ class SimilarityEmbedder:
                 testtop5,testtop1))
         for epoch in range(1,epochs+1):
             
-            for step,blocks in enumerate(self.dataloader):
+            for step,data in enumerate(self.dataloader):
+                sup_blocks, unsupervised_data = data 
+                pos_graph, neg_graph, unsup_blocks = unsupervised_data
+
+
                 self.net.train()
 
                 # these names are confusing because "seeds" are the input
@@ -418,15 +496,25 @@ class SimilarityEmbedder:
                 # output their embeddings based on their neighbors...
                 # the neighbors are the inputs in the sense that they are what we
                 # use to generate the embedding for the seeds.
-                input_nodes = blocks[0].srcdata[dgl.NID]
-                seeds = blocks[-1].dstdata[dgl.NID]
+                sup_input_nodes = sup_blocks[0].srcdata[dgl.NID]
+                sup_seeds = sup_blocks[-1].dstdata[dgl.NID]
 
-                batch_inputs = self.g.ndata['features'][input_nodes].to(self.device)
-                batch_labels = self.labels[seeds].to(self.device)
+                sup_batch_inputs = self.g.ndata['features'][sup_input_nodes].to(self.device)
+                sup_batch_labels = self.labels[sup_seeds].to(self.device)
 
-                embeddings = self.net(blocks, batch_inputs)
+                sup_embeddings = self.net(sup_blocks, sup_batch_inputs)
 
-                loss = self.pairwise_distance_loss(embeddings,seeds,batch_labels)
+                sup_loss = self.pairwise_distance_loss(sup_embeddings,sup_seeds,sup_batch_labels)
+
+                unsup_input_nodes = unsup_blocks[0].srcdata[dgl.NID]
+                unsup_seeds = unsup_blocks[-1].dstdata[dgl.NID]
+
+                unsup_batch_inputs = self.g.ndata['features'][unsup_input_nodes].to(self.device)
+
+                unsup_embeddings =self.net(unsup_blocks,unsup_batch_inputs)
+                unsup_loss = self.unsup_loss(unsup_embeddings, pos_graph, neg_graph)
+
+                loss = self.sup_weight * sup_loss + (1 - self.sup_weight) * unsup_loss
                 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -462,8 +550,8 @@ class SimilarityEmbedder:
         fig.set_size_inches(7, 7, forward=True)
         plt.xlabel('epoch')
         plt.ylabel('loss')
-        plt.savefig('./Results/loss{}_{}_{}_{}_{}.png'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain))
+        plt.savefig('./Results/loss{}_{}_{}_{}_{}_{}.png'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
         plt.close()
 
         fig = plt.figure()
@@ -479,8 +567,8 @@ class SimilarityEmbedder:
         fig.set_size_inches(7, 7, forward=True)
         plt.xlabel('epoch')
         plt.ylabel('accuracy')
-        plt.savefig('./Results/topn{}_{}_{}_{}_{}.png'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain))
+        plt.savefig('./Results/topn{}_{}_{}_{}_{}_{}.png'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
         plt.close()
 
 
@@ -510,8 +598,8 @@ class SimilarityEmbedder:
         images = imagep.glob('*.png')
         images = list(images)
         images.sort(key=lambda x : int(str(x).split('/')[-1].split('.')[0]))
-        with imageio.get_writer('./Results/training_{}_{}_{}_{}_{}.gif'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), mode='I') as writer:
+        with imageio.get_writer('./Results/training_{}_{}_{}_{}_{}_{}.gif'.format(
+            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight), mode='I') as writer:
             for image in images:
                 data = imageio.imread(image.__str__())
                 writer.append_data(data)
@@ -531,6 +619,8 @@ if __name__=="__main__":
     argparser.add_argument('--batch-size', type=int, default=1000)
     argparser.add_argument('--test-every', type=int, default=25)
     argparser.add_argument('--lr', type=float, default=1e-2)
+    argparser.add_argument('--sup-weight', type=float, default=1)
+    argparser.add_argument('--neg_samples', type=int, default=1)
     argparser.add_argument('--dropout', type=float, default=0)
     argparser.add_argument('--num-workers', type=int, default=0,
         help="Number of sampling processes. Use 0 for no extra process.")

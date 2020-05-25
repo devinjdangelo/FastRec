@@ -39,4 +39,4 @@ Finally, repeat with only 50% of node classes known at training time. This is no
 
 Using the GCN aggregator rather than the mean aggregator results in much greater performance of the untrained model. Fine tuning with unsupervised loss and a small number of known labels (10%) results in near 100% accuracy.
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_32_cosine_0.5.png" alt="drawing" width="500"/>
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_16_cosine_0.1_0.5.png" alt="drawing" width="500"/>

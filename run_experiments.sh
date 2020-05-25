@@ -22,4 +22,4 @@ python3 SageSimEmbed.py \
 --num-epochs 100 --batch-size 1000 \
 --test-every 10 --lr .01 --n-classes 10000 \
 --p-train 0.1 --distance-metric cosine --embedding-dim 16 \
---sup-weight 1 --neg_samples 1 --agg-type gcn
+--sup-weight 0.5 --neg_samples 1 --agg-type gcn

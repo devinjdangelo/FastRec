@@ -33,6 +33,10 @@ Next, test with 10k classes (~180k nodes and 1.3m edges). This graph is too larg
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_32_cosine_1.png" alt="drawing" width="500"/>
 
-Finally, repeat with only 50% of node classes known at training time. This is now semi-supervised training. The accuracy does not improve beyond 50%. We probably need the unsupervised loss term from the GraphSage paper for this.
+Finally, repeat with only 50% of node classes known at training time. This is now semi-supervised training. The accuracy does not improve beyond 50%. 
+
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_32_cosine_0.5.png" alt="drawing" width="500"/>
+
+Using the GCN aggregator rather than the mean aggregator results in much greater performance of the untrained model. Fine tuning with unsupervised loss and a small number of known labels (10%) results in near 100% accuracy.
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_32_cosine_0.5.png" alt="drawing" width="500"/>

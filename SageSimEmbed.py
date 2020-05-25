@@ -401,6 +401,7 @@ class SimilarityEmbedder:
             test_embeddings = embeddings[self.test_idx].to(self.device)
             candidate_embeddings = embeddings[self.test_idx2].to(self.device)
             distances = dist(test_embeddings,candidate_embeddings).detach().cpu().numpy()
+            distances = np.zeroes_like(distances)
 
             top_5 = {}
             for i,d in enumerate(distances):

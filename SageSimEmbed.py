@@ -397,32 +397,48 @@ class SimilarityEmbedder:
             if self.embedding_dim == 2:
                 self.all_embeddings.append(embeddings.detach())
 
-            labels = self.labels[self.is_relevant_mask].detach().numpy().tolist()
-            test_embeddings = embeddings[self.test_idx].to(self.device)
-            candidate_embeddings = embeddings[self.test_idx2].to(self.device)
-            distances = dist(test_embeddings,candidate_embeddings).detach().cpu().numpy()
-            distances = np.zeroes_like(distances)
 
+            print('computing embeddings for all nodes...')
+            labels = self.labels[self.is_relevant_mask].detach().numpy().tolist()
+
+            print('computing all pairwise distances for test set, keeping closest 5 per label')
             top_5 = {}
-            for i,d in enumerate(distances):
-                test_label,candidate_label = labels[self.test_idx[i]], labels[self.test_idx2[i]]
-                if test_label not in top_5.keys():
-                    top_5[test_label] = [(candidate_label,d)]
-                elif len(top_5[test_label]) < 5:
-                    top_5[test_label].append((candidate_label,d))
-                    top_5[test_label].sort(key=lambda x : x[1])
-                elif len(top_5[test_label]) == 5:
-                    if d < top_5[test_label][-1][1]:
-                        top_5[test_label][-1] = (candidate_label,d)
-                        top_5[test_label].sort(key=lambda x : x[1])
-                else:
-                    raise ValueError('top5 candidate list not <= 5 in length')
+            #maximum pairwise distance calculations that can fit in gpu memory
+            pairwise_batchsize = int(5e7)
+            pbar = tqdm.tqdm(total=len(self.test_idx))
+            for batch in range(len(self.test_idx) // pairwise_batchsize + 1):
+                startidx, endidx = pairwise_batchsize*batch, min(pairwise_batchsize*(batch+1),len(self.test_idx))
+                test_idx_batch = self.test_idx[startidx:endidx]
+                test_idx2_batch = self.test_idx2[startidx:endidx]
+
+
+                test_embeddings = embeddings[test_idx_batch].to(self.device)
+                candidate_embeddings = embeddings[test_idx2_batch].to(self.device)
+                distances = dist(test_embeddings,candidate_embeddings).detach().cpu().numpy()
+
+                for i,d in enumerate(distances):
+                    test_node, candidate_node = test_idx_batch[i], test_idx2_batch[i]
+                    test_label,candidate_label = labels[test_node], labels[candidate_node]
+                    if test_node not in top_5.keys():
+                        top_5[test_node] = [(candidate_node,d)]
+                    elif len(top_5[test_node]) < 5:
+                        top_5[test_node].append((candidate_node,d))
+                        top_5[test_node].sort(key=lambda x : x[1])
+                    elif len(top_5[test_node]) == 5:
+                        if d < top_5[test_node][-1][1]:
+                            top_5[test_node][-1] = (candidate_node,d)
+                            top_5[test_node].sort(key=lambda x : x[1])
+                    else:
+                        raise ValueError('top5 candidate list not <= 5 in length')
+
+                    pbar.update(1)
+            pbar.close()
 
             in_top5 = []
             in_top1 = []
-            for test_label,distances in top_5.items():
-                in_top5.append(test_label in [candidate_label for candidate_label,_ in distances])
-                in_top1.append(test_label == distances[0][0])
+            for test_node,distances in top_5.items():
+                in_top5.append(labels[test_node] in [labels[candidate_node] for candidate_node,_ in distances])
+                in_top1.append(labels[test_node] == labels[distances[0][0]])
 
         return np.mean(in_top5), np.mean(in_top1)
 

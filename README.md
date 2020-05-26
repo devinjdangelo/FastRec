@@ -21,7 +21,7 @@ To replicate the below experiments, clone the repo and cd into it. Then run:
 
 ## Results
 
-First experiment has a small number of classes in a 2d embedding space for visualization purposes. The classes of all nodes are known at training time, so this is fully supervised.
+First experiment has a small number of classes in a 2d embedding space for visualization purposes. The classes of all nodes are known at training time, so this is fully supervised.This uses the mean aggregator.
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_20_2_mse_1.0.png" alt="drawing" width="500"/>
 
@@ -29,7 +29,7 @@ The below visualizes all nodes in the 2-d embedding space for each epoch in tria
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/training_20_20_2_mse_1.0.gif" alt="drawing" width="500"/>
 
-Training is much faster and more stable (albeit slower on a per epoch basis) using GCN aggregator rather than the mean aggregator. 
+Training is much faster and more stable (albeit slower on a per epoch basis) using GCN aggregator rather than the mean aggregator. The below plots the same experiment as above just with GCN aggregator instead of mean. The model performs well without any training.
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_25_2_mse_1.0_1.0.png" alt="drawing" width="500"/>
 

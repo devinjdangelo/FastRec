@@ -31,9 +31,9 @@ The below visualizes all nodes in the 2-d embedding space for each epoch in tria
 
 Training is much faster and more stable (albeit slower on a per epoch basis) using GCN aggregator rather than the mean aggregator. 
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_25_2_mse_1.0_1.png" alt="drawing" width="500"/>
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_25_2_mse_1.0_1.0.png" alt="drawing" width="500"/>
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_25_2_mse_1.0_1.gif" alt="drawing" width="500"/>
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_25_2_mse_1.0_1.0.gif" alt="drawing" width="500"/>
 
 Next, test with 10k classes (~180k nodes and 1.3m edges). This graph is too large to fit in the memory of a single gpu without minibatch training. Still, all node classes are known at training time so this is fully supervised.
 

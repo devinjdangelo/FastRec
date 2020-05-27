@@ -15,6 +15,8 @@ import multiprocessing as mp
 from multiprocessing.pool import Pool
 import random
 
+import argparse
+
 
 topLeft = (39.127930,-77.559037)
 topRight = (39.117276,-76.847569)
@@ -55,7 +57,7 @@ def downSample(paths,nsamples=2,maxpts=100):
     
 def simchunk(i):
     #print(f'sim chunk {i} of 6000...')
-    npaths = 10
+    npaths = NPATHS
     nsteps = 5000
     paths = genSamples(npaths,nsteps)
     nsamples = random.randint(1,3)
@@ -64,7 +66,13 @@ def simchunk(i):
 
 if __name__=="__main__":
     
+    argparser = argparse.ArgumentParser("GraphSage training")
+    argparser.add_argument('--npaths', type=int, default=10)
+    argparser.add_argument('--nfiles', type=int, default=1000)
+
+    NPATHS = args.npaths 
+
     with Pool(mp.cpu_count()) as pp:
-        pp.map(simchunk,range(2000))
+        pp.map(simchunk,range(args.nfiles))
 
     

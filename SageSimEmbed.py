@@ -18,6 +18,7 @@ import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import tqdm
 import imageio
+import pickle
 
 import dgl
 import dgl.function as fn
@@ -191,18 +192,23 @@ class CrossEntropyLoss(nn.Module):
         loss = F.binary_cross_entropy_with_logits(score, label.float())
         return loss
     
-def load_rw_data(classes_to_load,p_train,max_test):
+def load_rw_data(classes_to_load,p_train,max_test,save,load):
     """Loads random walk data and converts it into a DGL graph"""
+
+    if load:
+        with open('gdata.pkl','rb') as gpkl:
+            data = pickle.load(gpkl)
+        return data
 
 
     p = pathlib.Path('./chunks')
     files = p.glob('simchunks*.csv')
     df = pd.DataFrame()
     nclasses = 0
-    for f in files:
+    for f in tqdm.tqdm(files,total=classes_to_load//1000):
         if nclasses>=classes_to_load:
             break
-        nclasses += 10
+        nclasses += 1000
         #print(f)
         i = pd.read_csv(f.__str__())
         df= df.append(i)
@@ -280,6 +286,11 @@ def load_rw_data(classes_to_load,p_train,max_test):
     train_mask = [1 if tf else 0 for tf in train_mask]
     test_mask = [1 if tf else 0 for tf in test_mask]
 
+    if save:
+        with open('gdata.pkl','wb') as gpkl:
+            data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node)
+            pickle.dump(data,gpkl)
+
     return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node
 
 
@@ -296,7 +307,6 @@ class SimilarityEmbedder:
         self.device = args.device
 
 
-        self.nx_g = self.g.to_networkx().to_undirected()
         self.net = SAGE(256, args.num_hidden, args.embedding_dim, args.num_layers, F.relu, args.dropout, args.agg_type)
         self.net.to(self.device)
         self.features = self.embed.weight
@@ -392,19 +402,19 @@ class SimilarityEmbedder:
             else:
                 raise ValueError('distance {} is not implemented'.format(self.distance))
 
+            print('computing embeddings for all nodes...')
             embeddings = self.net.inference(self.g, self.features,self.batch_size,self.device)[self.is_relevant_mask]
 
             if self.embedding_dim == 2:
                 self.all_embeddings.append(embeddings.detach())
 
 
-            print('computing embeddings for all nodes...')
             labels = self.labels[self.is_relevant_mask].detach().numpy().tolist()
 
             print('computing all pairwise distances for test set, keeping closest 5 per label')
             top_5 = {}
             #maximum pairwise distance calculations that can fit in gpu memory
-            pairwise_batchsize = int(5e7)
+            pairwise_batchsize = int(1e7)
             pbar = tqdm.tqdm(total=len(self.test_idx))
             for batch in range(len(self.test_idx) // pairwise_batchsize + 1):
                 startidx, endidx = pairwise_batchsize*batch, min(pairwise_batchsize*(batch+1),len(self.test_idx))
@@ -562,14 +572,14 @@ class SimilarityEmbedder:
             self.animate(test_every_n_epochs)
 
     def log_histories(self,loss,top5,top1,test_every_n_epochs):
-        loss_epochs = list(range(len(loss)))
-        test_epochs = list(range(0,len(loss),test_every_n_epochs))
+        loss_epochs = list(range(len(loss)+1))
+        test_epochs = list(range(0,len(loss)+1,test_every_n_epochs))
 
         fig = plt.figure()
         ax = fig.subplots()
         plt.title('Triplet {} Loss by Training Epoch'.format(self.distance))
-        fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
+        #fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
+            #self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
         plt.scatter(loss_epochs,loss)
         plt.plot(loss_epochs,loss)
         fig.set_size_inches(7, 7, forward=True)
@@ -582,8 +592,8 @@ class SimilarityEmbedder:
         fig = plt.figure()
         ax = fig.subplots()
         plt.title('Test Inference Accuracy'.format(self.distance))
-        fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
+        #fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
+            #self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
         plt.scatter(test_epochs,top5)
         plt.plot(test_epochs,top5,label='Top 5 Accuracy')
         plt.scatter(test_epochs,top1,label='Top 1 Accuracy')
@@ -659,13 +669,15 @@ since currently relying on all pairwise search for testing.")
     argparser.add_argument('--distance-metric', type=str, default='cosine',
         help="Distance metric to use in triplet loss function and nearest neighbors inference, mse or cosine.")
     argparser.add_argument('--embedding-dim',type=int,default=32,help="Dimensionality of the final embedding")
+    argparser.add_argument('--save',action='store_true')
+    argparser.add_argument('--load',action='store_true')
     args = argparser.parse_args()
 
 
 
 
     print('loading data...')
-    rw_data = load_rw_data(args.n_classes,args.p_train,args.max_test_labels)
+    rw_data = load_rw_data(args.n_classes,args.p_train,args.max_test_labels,args.save,args.load)
     trainer = SimilarityEmbedder(rw_data,args)
     trainer.train(args.num_epochs,args.test_every)
 

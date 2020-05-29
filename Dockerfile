@@ -1,4 +1,4 @@
-FROM nvidia/cuda:10.1-cudnn7-devel-ubuntu16.04
+FROM ubuntu:16.04
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -40,13 +40,23 @@ RUN apt-get update && apt-get install -y \
     libpng-dev \
     zlib1g-dev \
     xdg-utils \
-    python3 \
-    python3-pip \
     net-tools 
 
+ENV PATH="/root/miniconda3/bin:${PATH}"
+ARG PATH="/root/miniconda3/bin:${PATH}"
 
-RUN pip3 install --upgrade pip
-RUN pip3 install numpy pandas matplotlib networkx geohash2 tqdm sklearn
-RUN pip3 install torch==1.5.0+cu101 torchvision==0.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html 
-RUN pip3 install dgl-cu101     # For CUDA 10.1 Build
-RUN pip3 install imageio
+RUN wget \
+    https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+    && mkdir /root/.conda \
+    && bash Miniconda3-latest-Linux-x86_64.sh -b \
+    && rm -f Miniconda3-latest-Linux-x86_64.sh  
+
+RUN pip install --upgrade pip
+RUN conda install numpy pandas matplotlib networkx tqdm scikit-learn imageio
+RUN pip install geohash2
+RUN conda install pytorch torchvision cudatoolkit=10.0 faiss-gpu -c pytorch
+RUN conda install -c dglteam dgl-cuda10.0
+
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+

@@ -6,7 +6,6 @@ Created on Wed May  6 10:39:20 2020
 """
 
 import pandas as pd
-import geohash2 as gh
 import networkx as nx
 import time
 import numpy as np
@@ -30,270 +29,14 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import faiss
 
-class NegativeSampler(object):
-    def __init__(self, g):
-        self.weights = g.in_degrees().float() ** 0.75
+from geosim import load_rw_data
+from torchmodels import *
 
-    def __call__(self, num_samples):
-        return self.weights.multinomial(num_samples, replacement=True)
+GPU = faiss.StandardGpuResources()
 
-class UnsupervisedNeighborSampler(object):
-    def __init__(self, g, fanouts, num_negs):
-        self.g = g
-        self.fanouts = fanouts
-        self.neg_sampler = NegativeSampler(g)
-        self.num_negs = num_negs
-
-    def sample_blocks(self, seed_edges):
-        n_edges = len(seed_edges)
-        seed_edges = th.LongTensor(np.asarray(seed_edges))
-        heads, tails = self.g.find_edges(seed_edges)
-        neg_tails = self.neg_sampler(self.num_negs * n_edges)
-        neg_heads = heads.view(-1, 1).expand(n_edges, self.num_negs).flatten()
-
-        # Maintain the correspondence between heads, tails and negative tails as two
-        # graphs.
-        # pos_graph contains the correspondence between each head and its positive tail.
-        # neg_graph contains the correspondence between each head and its negative tails.
-        # Both pos_graph and neg_graph are first constructed with the same node space as
-        # the original graph.  Then they are compacted together with dgl.compact_graphs.
-        pos_graph = dgl.graph((heads, tails), num_nodes=self.g.number_of_nodes())
-        neg_graph = dgl.graph((neg_heads, neg_tails), num_nodes=self.g.number_of_nodes())
-        pos_graph, neg_graph = dgl.compact_graphs([pos_graph, neg_graph])
-
-        # Obtain the node IDs being used in either pos_graph or neg_graph.  Since they
-        # are compacted together, pos_graph and neg_graph share the same compacted node
-        # space.
-        seeds = pos_graph.ndata[dgl.NID]
-        blocks = []
-        for fanout in self.fanouts:
-            # For each seed node, sample ``fanout`` neighbors.
-            frontier = dgl.sampling.sample_neighbors(self.g, seeds, fanout, replace=True)
-            # Remove all edges between heads and tails, as well as heads and neg_tails.
-            _, _, edge_ids = frontier.edge_ids(
-                th.cat([heads, tails, neg_heads, neg_tails]),
-                th.cat([tails, heads, neg_tails, neg_heads]),
-                return_uv=True)
-            frontier = dgl.remove_edges(frontier, edge_ids)
-            # Then we compact the frontier into a bipartite graph for message passing.
-            block = dgl.to_block(frontier, seeds)
-            # Obtain the seed nodes for next layer.
-            seeds = block.srcdata[dgl.NID]
-
-            blocks.insert(0, block)
-        return pos_graph, neg_graph, blocks
-
-
-class NeighborSampler(object):
-    def __init__(self, g, fanouts):
-        self.g = g
-        self.fanouts = fanouts
-
-    def sample_blocks(self, seeds):
-        seeds = th.LongTensor(np.asarray(seeds))
-        blocks = []
-        for fanout in self.fanouts:
-            # For each seed node, sample ``fanout`` neighbors.
-            frontier = dgl.sampling.sample_neighbors(self.g, seeds, fanout, replace=True)
-            # Then we compact the frontier into a bipartite graph for message passing.
-            block = dgl.to_block(frontier, seeds)
-            # Obtain the seed nodes for next layer.
-            seeds = block.srcdata[dgl.NID]
-
-            blocks.insert(0, block)
-        return blocks
-
-class SAGE(nn.Module):
-    def __init__(self,
-                 in_feats,
-                 n_hidden,
-                 n_classes,
-                 n_layers,
-                 activation,
-                 dropout,
-                 agg_type):
-        super().__init__()
-        self.n_layers = n_layers
-        self.n_hidden = n_hidden
-        self.n_classes = n_classes
-        self.layers = nn.ModuleList()
-        self.layers.append(dglnn.SAGEConv(in_feats, n_hidden, agg_type))
-        for i in range(1, n_layers - 1):
-            self.layers.append(dglnn.SAGEConv(n_hidden, n_hidden, agg_type))
-        self.layers.append(dglnn.SAGEConv(n_hidden, n_classes, agg_type))
-        self.dropout = nn.Dropout(dropout)
-        self.activation = activation
-
-    def forward(self, blocks, x):
-        h = x
-        for l, (layer, block) in enumerate(zip(self.layers, blocks)):
-            # We need to first copy the representation of nodes on the RHS from the
-            # appropriate nodes on the LHS.
-            # Note that the shape of h is (num_nodes_LHS, D) and the shape of h_dst
-            # would be (num_nodes_RHS, D)
-            h_dst = h[:block.number_of_dst_nodes()]
-            # Then we compute the updated representation on the RHS.
-            # The shape of h now becomes (num_nodes_RHS, D)
-            h = layer(block, (h, h_dst))
-            if l != len(self.layers) - 1:
-                h = self.activation(h)
-                h = self.dropout(h)
-        return h
-
-    def inference(self, g, x, batch_size, device):
-        """
-        Inference with the GraphSAGE model on full neighbors (i.e. without neighbor sampling).
-        g : the entire graph.
-        x : the input of entire node set.
-        The inference code is written in a fashion that it could handle any number of nodes and
-        layers.
-        """
-        # During inference with sampling, multi-layer blocks are very inefficient because
-        # lots of computations in the first few layers are repeated.
-        # Therefore, we compute the representation of all nodes layer by layer.  The nodes
-        # on each layer are of course splitted in batches.
-        # TODO: can we standardize this?
-        nodes = th.arange(g.number_of_nodes())
-        for l, layer in enumerate(self.layers):
-            y = th.zeros(g.number_of_nodes(), self.n_hidden if l != len(self.layers) - 1 else self.n_classes)
-
-            for start in tqdm.trange(0, len(nodes), batch_size):
-                end = start + batch_size
-                batch_nodes = nodes[start:end]
-                block = dgl.to_block(dgl.in_subgraph(g, batch_nodes), batch_nodes)
-                input_nodes = block.srcdata[dgl.NID]
-
-                h = x[input_nodes].to(device)
-                h_dst = h[:block.number_of_dst_nodes()]
-                h = layer(block, (h, h_dst))
-                if l != len(self.layers) - 1:
-                    h = self.activation(h)
-                    h = self.dropout(h)
-
-                y[start:end] = h.cpu()
-
-            x = y
-        return y
-
-class CrossEntropyLoss(nn.Module):
-    def forward(self, block_outputs, pos_graph, neg_graph):
-        with pos_graph.local_scope():
-            pos_graph.ndata['h'] = block_outputs
-            pos_graph.apply_edges(fn.u_dot_v('h', 'h', 'score'))
-            pos_score = pos_graph.edata['score']
-        with neg_graph.local_scope():
-            neg_graph.ndata['h'] = block_outputs
-            neg_graph.apply_edges(fn.u_dot_v('h', 'h', 'score'))
-            neg_score = neg_graph.edata['score']
-
-        score = th.cat([pos_score, neg_score])
-        label = th.cat([th.ones_like(pos_score), th.zeros_like(neg_score)]).long()
-        loss = F.binary_cross_entropy_with_logits(score, label.float())
-        return loss
-    
-def load_rw_data(classes_to_load,p_train,max_test,save,load):
-    """Loads random walk data and converts it into a DGL graph"""
-
-    if load:
-        with open('gdata.pkl','rb') as gpkl:
-            data = pickle.load(gpkl)
-        return data
-
-
-    p = pathlib.Path('./chunks')
-    files = p.glob('simchunks*.csv')
-    df = pd.DataFrame()
-    nclasses = 0
-    for f in tqdm.tqdm(files,total=classes_to_load//1000):
-        if nclasses>=classes_to_load:
-            break
-        nclasses += 1000
-        #print(f)
-        i = pd.read_csv(f.__str__())
-        df= df.append(i)
-        #print(len(df))
-        
-    #df = pd.read_csv('C:\code\geosim\simchunk0.csv')
-    df = df.iloc[:,1:]
-    df['idxsample'] = df.apply(
-        lambda row : str(row['sample']) + '_' + row.id,axis=1)
-    df['geohash'] = df.apply(
-        lambda row : gh.encode(row.lat,row.lon,precision=7),axis=1)
-    
-    edges = df[['idxsample','geohash']].groupby(['idxsample','geohash'],
-                            as_index=False).size().reset_index(name='counts')
-
-    nodes = edges.idxsample.unique().tolist()
-    n_id_nodes = len(nodes)
-    nodes = pd.DataFrame(nodes,columns=['Nodes'])
-    nodes['classes'] = nodes.Nodes.apply(lambda x : x[1:])
-    
-    classnums = pd.DataFrame(nodes.classes.unique(),columns=['classes'])
-    classnums['label'] = list(range(len(classnums)))
-    nodes = nodes.merge(classnums,on='classes')
-    
-    nodes = nodes.append(pd.DataFrame(edges.geohash.unique().tolist(),columns=['Nodes']))
-    nodes['id'] = list(range(len(nodes)))
-    
-    edges = edges.merge(nodes,left_on='idxsample',right_on='Nodes')
-    edges = edges.merge(nodes,left_on='geohash',right_on='Nodes')
-    
-    n_geohash_nodes = len(nodes) - n_id_nodes
-
-    G = DGLGraph()
-    G.add_nodes(len(nodes))
-    G.add_edges(edges.id_x.tolist(),edges.id_y.tolist())
-    G.add_edges(edges.id_y.tolist(),edges.id_x.tolist())
-    G.readonly()
-
-    #ntypes = ['id' for _ in range(n_id_nodes)] + ['geohash' for _ in range(n_geohash_nodes)]
-    #etypes = ['to' for _ in range(len(nodes))]
-    #G = dgl.to_hetero(G,ntypes,etypes)
-
-    G = dgl.as_heterograph(G)
-
-    edges = edges.merge(nodes,left_on='geohash',right_on='Nodes')
-    
-    embed = nn.Embedding(len(nodes),256)
-    G.ndata['features'] = embed.weight
-    labels = [-1 if np.isnan(x) else x for x in nodes.label.tolist()]
-    labels = th.tensor(labels,dtype=th.long)
-    
-    train_mask =  np.random.choice(
-        a=[False,True],size=(len(nodes)),p=[1-p_train,p_train])
-
-
-    node_counts = nodes.groupby('label',as_index=False).size().reset_index(name='counts')
-    node_counts = node_counts[node_counts.counts>1]
-    test_nodes = node_counts.label.tolist()
-
-    #train_mask = np.array([True] + [False]*5 + [True] + [False]*(len(nodes)-7))
-    p_test = 1
-    test_labels =  np.random.choice(
-        a=list(range(nclasses)),size=min(max_test,nclasses),replace=False)
-
-
-    test_mask = [l in test_labels and l in test_nodes for l in nodes.label.tolist()]
-
-
-    is_relevant_node = np.logical_not(nodes.label.isna().to_numpy())
-    #test_mask = np.logical_not(is_relevant_node)
-    train_mask = np.logical_and(train_mask,is_relevant_node)
-    test_mask = np.logical_and(test_mask,is_relevant_node)
-    #test_mask = np.logical_or(test_mask,train_mask)
-
-    train_mask = [1 if tf else 0 for tf in train_mask]
-    test_mask = [1 if tf else 0 for tf in test_mask]
-
-    if save:
-        with open('gdata.pkl','wb') as gpkl:
-            data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node)
-            pickle.dump(data,gpkl)
-
-    return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node
-
-
+   
 class SimilarityEmbedder:
     def __init__(self,rw_data,args):
 
@@ -345,9 +88,9 @@ class SimilarityEmbedder:
 
         #print('setting up pairwise loss tensors...')
         #self.setup_pairwise_loss_tensors()
-        print('setting up pairwise eval tensors...')
-        self.setup_pairwise_eval_tensors()
-        print('done!')
+        #print('setting up pairwise eval tensors...')
+        #self.setup_pairwise_eval_tensors()
+        #print('done!')
 
     def setup_pairwise_loss_tensors(self,labelsnp):
         idx1 = []
@@ -403,7 +146,11 @@ class SimilarityEmbedder:
                 raise ValueError('distance {} is not implemented'.format(self.distance))
 
             print('computing embeddings for all nodes...')
-            embeddings = self.net.inference(self.g, self.features,self.batch_size,self.device)[self.is_relevant_mask]
+            embeddings = self.net.inference(self.g, self.features,self.batch_size,self.device)
+            embeddings_np = embeddings.detach().cpu().numpy()
+            test_embeddings_np = embeddings_np[self.test_mask]
+            test_labels = self.labels[self.test_mask].detach().numpy().tolist()
+            embeddings = embeddings[self.is_relevant_mask]
 
             if self.embedding_dim == 2:
                 self.all_embeddings.append(embeddings.detach())
@@ -411,46 +158,32 @@ class SimilarityEmbedder:
 
             labels = self.labels[self.is_relevant_mask].detach().numpy().tolist()
 
-            print('computing all pairwise distances for test set, keeping closest 5 per label')
-            top_5 = {}
-            #maximum pairwise distance calculations that can fit in gpu memory
-            pairwise_batchsize = int(1e7)
-            pbar = tqdm.tqdm(total=len(self.test_idx))
-            for batch in range(len(self.test_idx) // pairwise_batchsize + 1):
-                startidx, endidx = pairwise_batchsize*batch, min(pairwise_batchsize*(batch+1),len(self.test_idx))
-                test_idx_batch = self.test_idx[startidx:endidx]
-                test_idx2_batch = self.test_idx2[startidx:endidx]
+            t = time.time()
+            if self.distance=='cosine':
+                index = faiss.IndexFlatIP(self.embedding_dim)
+                index = faiss.index_cpu_to_gpu(GPU, 0, index)
+                normalized_embeddings = np.copy(embeddings_np[self.is_relevant_mask])
+                #this function operates in place so np.copy any views into a new array before using.
+                faiss.normalize_L2(normalized_embeddings)
+                index.add(normalized_embeddings)
+                normalized_search = np.copy(test_embeddings_np)
+                faiss.normalize_L2(normalized_search)
+                D, I = index.search(normalized_search,5+1)
+            elif self.distance=='mse':
+                index = faiss.IndexFlatL2(self.embedding_dim)
+                index = faiss.index_cpu_to_gpu(GPU, 0, index)
+                index.add(embeddings_np[self.is_relevant_mask])
+                D, I = index.search(test_embeddings_np,5+1)
+            ft1, ft5 = [], []
+            for node, neighbors in enumerate(I):
+                label = test_labels[node]
+                neighbor_labels = [labels[n] for n in neighbors[1:]]
+                ft1.append(label==neighbor_labels[0])
+                ft5.append(label in neighbor_labels)
+            #print(D,I)
+            print('faiss search done in {} seconds'.format(time.time() - t))
 
-
-                test_embeddings = embeddings[test_idx_batch].to(self.device)
-                candidate_embeddings = embeddings[test_idx2_batch].to(self.device)
-                distances = dist(test_embeddings,candidate_embeddings).detach().cpu().numpy()
-
-                for i,d in enumerate(distances):
-                    test_node, candidate_node = test_idx_batch[i], test_idx2_batch[i]
-                    test_label,candidate_label = labels[test_node], labels[candidate_node]
-                    if test_node not in top_5.keys():
-                        top_5[test_node] = [(candidate_node,d)]
-                    elif len(top_5[test_node]) < 5:
-                        top_5[test_node].append((candidate_node,d))
-                        top_5[test_node].sort(key=lambda x : x[1])
-                    elif len(top_5[test_node]) == 5:
-                        if d < top_5[test_node][-1][1]:
-                            top_5[test_node][-1] = (candidate_node,d)
-                            top_5[test_node].sort(key=lambda x : x[1])
-                    else:
-                        raise ValueError('top5 candidate list not <= 5 in length')
-
-                    pbar.update(1)
-            pbar.close()
-
-            in_top5 = []
-            in_top1 = []
-            for test_node,distances in top_5.items():
-                in_top5.append(labels[test_node] in [labels[candidate_node] for candidate_node,_ in distances])
-                in_top1.append(labels[test_node] == labels[distances[0][0]])
-
-        return np.mean(in_top5), np.mean(in_top1)
+        return np.mean(ft5), np.mean(ft1)
 
     def pairwise_distance_loss(self,embeddings,seeds,labels):
         
@@ -572,8 +305,8 @@ class SimilarityEmbedder:
             self.animate(test_every_n_epochs)
 
     def log_histories(self,loss,top5,top1,test_every_n_epochs):
-        loss_epochs = list(range(len(loss)+1))
-        test_epochs = list(range(0,len(loss)+1,test_every_n_epochs))
+        loss_epochs = list(range(len(loss)))
+        test_epochs = list(range(0,len(loss),test_every_n_epochs))
 
         fig = plt.figure()
         ax = fig.subplots()
@@ -585,7 +318,7 @@ class SimilarityEmbedder:
         fig.set_size_inches(7, 7, forward=True)
         plt.xlabel('epoch')
         plt.ylabel('loss')
-        plt.savefig('./Results/loss{}_{}_{}_{}_{}_{}.png'.format(
+        plt.savefig('../Results/loss{}_{}_{}_{}_{}_{}.png'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
         plt.close()
 
@@ -602,7 +335,7 @@ class SimilarityEmbedder:
         fig.set_size_inches(7, 7, forward=True)
         plt.xlabel('epoch')
         plt.ylabel('accuracy')
-        plt.savefig('./Results/topn{}_{}_{}_{}_{}_{}.png'.format(
+        plt.savefig('../Results/topn{}_{}_{}_{}_{}_{}.png'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
         plt.close()
 
@@ -626,14 +359,14 @@ class SimilarityEmbedder:
                     continue
                 ax.annotate(label,(data[j,0],data[j,1]))
             #pos = draw(i)  # draw the prediction of the first epoch
-            plt.savefig('./ims/{n}.png'.format(n=i))
+            plt.savefig('../ims/{n}.png'.format(n=i))
             plt.close()
 
-        imagep = pathlib.Path('./ims/')
+        imagep = pathlib.Path('../ims/')
         images = imagep.glob('*.png')
         images = list(images)
         images.sort(key=lambda x : int(str(x).split('/')[-1].split('.')[0]))
-        with imageio.get_writer('./Results/training_{}_{}_{}_{}_{}_{}.gif'.format(
+        with imageio.get_writer('../Results/training_{}_{}_{}_{}_{}_{}.gif'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight), mode='I') as writer:
             for image in images:
                 data = imageio.imread(image.__str__())

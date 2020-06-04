@@ -1,4 +1,4 @@
-python3 geosim.py
+python3 geosim.py --npaths 10 --nfiles 100
 
 python3 SageSimEmbed.py \
 --num-epochs 150 --batch-size 25 \
@@ -37,11 +37,11 @@ python3 SageSimEmbed.py \
 --sup-weight 0.5 --neg_samples 1 --agg-type gcn
 
 
-python3 geosim.py --npaths 10000 --nfiles 100
+python3 geosim.py --npaths 1000 --nfiles 1000
 
 python3 SageSimEmbed.py \
 --num-epochs 100 --batch-size 1000 \
---test-every 10 --lr .01 --n-classes 100000 \
+--test-every 10 --lr .01 --n-classes 500000 \
 --p-train 0.01 --distance-metric cosine --embedding-dim 16 \
---sup-weight 0.5 --neg_samples 1 --agg-type gcn
+--sup-weight 0.5 --neg_samples 1 --agg-type gcn --max-test-labels 500000 --save
 

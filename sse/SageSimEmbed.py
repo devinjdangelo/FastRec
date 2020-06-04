@@ -31,7 +31,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import faiss
 
-from geosim import load_rw_data
+from geosim import load_rw_data, load_rw_data_streaming
 from torchmodels import *
 
 GPU = faiss.StandardGpuResources()
@@ -55,16 +55,16 @@ class SimilarityEmbedder:
         self.features = self.embed.weight
         self.features.to(self.device)
         self.embed.to(self.device)
-        self.labels.to(self.device)
+        #self.labels.to(self.device)
         self.optimizer = th.optim.Adam(it.chain(self.net.parameters(),self.embed.parameters()), lr=args.lr)
 
         self.sup_sampler = NeighborSampler(self.g, [int(fanout) for fanout in args.fan_out.split(',')])
         self.unsup_sampler = UnsupervisedNeighborSampler(self.g, [int(fanout) for fanout in args.fan_out.split(',')],args.neg_samples)
 
-        self.train_nid = th.LongTensor(np.nonzero(self.train_mask)[0])
-        self.test_nid = th.LongTensor(np.nonzero(self.test_mask)[0])
-        self.train_mask = th.BoolTensor(self.train_mask)
-        self.test_mask = th.BoolTensor(self.test_mask)
+        self.train_nid = np.nonzero(self.train_mask)[0]
+        self.test_nid = np.nonzero(self.test_mask)[0]
+        #self.train_mask = self.train_mask
+        #self.test_mask = self.test_mask
 
         self.batch_size = args.batch_size
         self.sup_weight = args.sup_weight
@@ -75,7 +75,7 @@ class SimilarityEmbedder:
 
         cf = lambda i : (self.sup_sampler.sample_blocks(i), self.unsup_sampler.sample_blocks(i))
         self.dataloader = DataLoader(
-                            dataset=self.train_nid.numpy(),
+                            dataset=self.train_nid,
                             batch_size=args.batch_size,
                             collate_fn=cf,
                             shuffle=True,
@@ -112,8 +112,8 @@ class SimilarityEmbedder:
 
 
     def setup_pairwise_eval_tensors(self):
-        test_labels = self.labels[self.test_mask].detach().numpy().tolist()
-        labelsnp = self.labels[self.is_relevant_mask].detach().numpy().tolist()
+        test_labels = self.labels[self.test_mask]
+        labelsnp = self.labels[self.is_relevant_mask]
 
         self.test_idx = []
         self.test_idx2 = []
@@ -146,17 +146,17 @@ class SimilarityEmbedder:
                 raise ValueError('distance {} is not implemented'.format(self.distance))
 
             print('computing embeddings for all nodes...')
-            embeddings = self.net.inference(self.g, self.features,self.batch_size,self.device)
+            embeddings = self.net.inference(self.g, self.features,25000,self.device)
             embeddings_np = embeddings.detach().cpu().numpy()
             test_embeddings_np = embeddings_np[self.test_mask]
-            test_labels = self.labels[self.test_mask].detach().numpy().tolist()
-            embeddings = embeddings[self.is_relevant_mask]
+            test_labels = self.labels[self.test_mask]
+            #embeddings = embeddings[self.is_relevant_mask]
 
             if self.embedding_dim == 2:
                 self.all_embeddings.append(embeddings.detach())
 
 
-            labels = self.labels[self.is_relevant_mask].detach().numpy().tolist()
+            labels = self.labels[self.is_relevant_mask]
 
             t = time.time()
             if self.distance=='cosine':
@@ -174,6 +174,8 @@ class SimilarityEmbedder:
                 index = faiss.index_cpu_to_gpu(GPU, 0, index)
                 index.add(embeddings_np[self.is_relevant_mask])
                 D, I = index.search(test_embeddings_np,5+1)
+
+            index.reset() #free gpu memory
             ft1, ft5 = [], []
             for node, neighbors in enumerate(I):
                 label = test_labels[node]
@@ -187,7 +189,6 @@ class SimilarityEmbedder:
 
     def pairwise_distance_loss(self,embeddings,seeds,labels):
         
-        labels = labels.cpu().numpy()
         batch_relevant_nodes = [i for i,l in enumerate(labels) if l!=-1]
         embeddings = embeddings[batch_relevant_nodes]
         labels = labels[batch_relevant_nodes]
@@ -262,7 +263,7 @@ class SimilarityEmbedder:
                     sup_seeds = sup_blocks[-1].dstdata[dgl.NID]
 
                     sup_batch_inputs = self.g.ndata['features'][sup_input_nodes].to(self.device)
-                    sup_batch_labels = self.labels[sup_seeds].to(self.device)
+                    sup_batch_labels = self.labels[sup_seeds]
 
                     sup_embeddings = self.net(sup_blocks, sup_batch_inputs)
 
@@ -287,9 +288,11 @@ class SimilarityEmbedder:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+                th.cuda.empty_cache()
 
-                print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f}".format(
-                        epoch, step, loss.item()))
+
+                print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f} | Mem+Maxmem {:.3f} / {:.3f}".format(
+                        epoch, step, loss.item(), th.cuda.memory_allocated()/(1024**3),th.cuda.max_memory_allocated()/(1024**3)))
             
             loss_history.append(loss.item())
             if epoch % test_every_n_epochs == 0 or epoch==epochs:
@@ -342,7 +345,7 @@ class SimilarityEmbedder:
 
     def animate(self,test_every_n_epochs):
 
-        labelsnp = self.labels.detach().numpy().tolist()
+        labelsnp = self.labels.detach().numpy()[self.is_relevant_mask]
         for i,embedding in enumerate(tqdm.tqdm(self.all_embeddings)):
             data = embedding.cpu().numpy()
             fig = plt.figure(dpi=150)
@@ -410,7 +413,7 @@ since currently relying on all pairwise search for testing.")
 
 
     print('loading data...')
-    rw_data = load_rw_data(args.n_classes,args.p_train,args.max_test_labels,args.save,args.load)
+    rw_data = load_rw_data_streaming(args.n_classes,args.p_train,args.max_test_labels,args.save,args.load)
     trainer = SimilarityEmbedder(rw_data,args)
     trainer.train(args.num_epochs,args.test_every)
 

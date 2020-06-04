@@ -48,7 +48,7 @@ def genSamples(npaths,nsteps):
     return paths
 
 def downSample(paths,nsamples=2,maxpts=100):
-    df = pd.DataFrame(columns=['sample','id','time','lon','lat'])
+    df = pd.DataFrame(columns=['id','classid','time','lon','lat'])
     for sample in range(nsamples):
         #ndpts = (1-np.random.power(5,size=paths.shape[0])) * maxpts
         ndpts = [100 for x in range(len(paths))]
@@ -57,19 +57,125 @@ def downSample(paths,nsamples=2,maxpts=100):
             times = np.random.choice(path.shape[0], int(n), replace=False)
             sampled = path[times]
             x,y = sampled[:,0],sampled[:,1]
-            idsha = hashlib.sha256(path).hexdigest()
-            df = df.append(pd.DataFrame(zip(it.repeat(sample),it.repeat(idsha),times,x,y),columns=['sample','id','time','lon','lat']))
+            classid = hashlib.sha256(path).hexdigest()
+            uid = str(sample) + '_' + str(classid)
+
+            df = df.append(pd.DataFrame(zip(it.repeat(uid),it.repeat(classid),times,x,y),columns=['id','classid','time','lon','lat']))
             
     return df
     
 def simchunk(i):
     #print(f'sim chunk {i} of 6000...')
+    #need to reset seed to ensure different randomness accross cpus
+    np.random.seed()
     npaths = NPATHS
     nsteps = 5000
     paths = genSamples(npaths,nsteps)
-    nsamples = random.randint(1,3)
+    nsamples = random.randint(2,3)
     df = downSample(paths,nsamples=nsamples)
-    df.to_csv('../chunks/simchunks{i}.csv'.format(i=i))
+    df['geohash'] = df.apply(
+        lambda row : gh.encode(row.lat,row.lon,precision=7),axis=1)
+    df.to_csv('/geosim/simchunks{i}.csv'.format(i=i),index=False)
+
+def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
+    """Loads random walk data and converts it into a DGL graph in streaming
+    fashion so minimize RAM usage for large graph creation"""
+
+    if load:
+        with open('/geosim/gdata.pkl','rb') as gpkl:
+            data = pickle.load(gpkl)
+        return data
+
+
+    p = pathlib.Path('/geosim/')
+    files = p.glob('simchunks*.csv')
+    df = pd.DataFrame()
+    nclasses = 0
+    G = DGLGraph()
+    node_ids = pd.DataFrame(columns=['id','intID','classid'])
+    pbar = tqdm.tqdm(total=classes_to_load)
+    for f in files:
+        if nclasses>=classes_to_load:
+            break
+
+        df = pd.read_csv(f.__str__())
+        df = df[['id','classid','geohash']]
+
+        entities = df[['id','classid']].drop_duplicates()
+        geohashes = pd.DataFrame(zip(df.geohash,it.repeat(-1)),columns=['id','classid']).drop_duplicates()
+        nodes = pd.concat([entities, geohashes])
+        nodes = nodes.merge(node_ids,on='id',how='left',suffixes=('','_merged'))
+        num_new_nodes = int(nodes.intID.isna().sum())
+        current_maximum_id = node_ids.intID.max()
+        start =(current_maximum_id+1)
+        if np.isnan(start):
+            start = 0
+        end = start + num_new_nodes
+        new_nodes = pd.isna(nodes.intID)
+        nodes.loc[new_nodes,'intID'] = list(range(start,end))
+        update_nodes = nodes[new_nodes]
+        update_nodes = update_nodes[['id','intID','classid']]
+        node_ids = pd.concat([node_ids,update_nodes])
+
+        edges = df.merge(nodes,left_on='id',right_on='id',how='left')
+        edges = edges.merge(nodes,left_on='geohash',right_on='id',how='left',suffixes=('','_geohash'))
+        edges = edges[['intID','intID_geohash']]
+
+        G.add_nodes(num_new_nodes)
+        G.add_edges(edges.intID.tolist(),edges.intID_geohash.tolist())
+        G.add_edges(edges.intID_geohash.tolist(),edges.intID.tolist())
+
+
+        added = df.classid.nunique()
+        nclasses += added
+        pbar.update(added)
+    pbar.close()
+
+
+    G.readonly()
+    G = dgl.as_heterograph(G)
+    print('graph completed... computing train, test split')
+
+    node_ids['intID'] = pd.to_numeric(node_ids['intID'])
+    #node_ids = node_ids.sort_values('intID')
+
+    embed = nn.Embedding(len(node_ids),256)
+    G.ndata['features'] = embed.weight
+
+    classnums = pd.DataFrame(node_ids.classid.unique(),columns=['classid'])
+    classnums['label'] = list(range(len(classnums)))
+    classnums.loc[classnums.classid==-1,'label'] = -1
+    node_ids = node_ids.merge(classnums,on='classid')
+    node_ids = node_ids.sort_values('intID')
+    node_ids.to_csv('./test.csv')
+    labels = node_ids.label.tolist()
+    labels = np.array(labels,dtype=np.float32)
+    
+    train_mask =  np.random.choice(
+        a=[False,True],size=(len(node_ids)),p=[1-p_train,p_train])
+
+
+    test_labels =  np.random.choice(
+        a=list(range(nclasses)),size=min(max_test,nclasses),replace=False)
+    test_mask = [l in test_labels for l in node_ids.label.tolist()]
+
+    is_relevant_node = node_ids.label.to_numpy() >= 0 #only -1 is not relevant
+    #test_mask = np.logical_not(is_relevant_node)
+    train_mask = np.logical_and(train_mask,is_relevant_node)
+    test_mask = np.logical_and(test_mask,is_relevant_node)
+    #test_mask = np.logical_or(test_mask,train_mask)
+
+    train_mask = [1 if tf else 0 for tf in train_mask]
+    test_mask = [1 if tf else 0 for tf in test_mask]
+
+    if save:
+        with open('/geosim/gdata.pkl','wb') as gpkl:
+            data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node)
+            pickle.dump(data,gpkl)
+
+
+    return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node
+
 
 def load_rw_data(classes_to_load,p_train,max_test,save,load):
     """Loads random walk data and converts it into a DGL graph"""
@@ -80,10 +186,11 @@ def load_rw_data(classes_to_load,p_train,max_test,save,load):
         return data
 
 
-    p = pathlib.Path('../chunks')
+    p = pathlib.Path('/geosim/')
     files = p.glob('simchunks*.csv')
     df = pd.DataFrame()
     nclasses = 0
+    geohash_ids = pd.DataFrame(columns=['Nodes'])
     for f in tqdm.tqdm(files,total=classes_to_load//1000):
         if nclasses>=classes_to_load:
             break
@@ -125,10 +232,6 @@ def load_rw_data(classes_to_load,p_train,max_test,save,load):
     G.add_edges(edges.id_x.tolist(),edges.id_y.tolist())
     G.add_edges(edges.id_y.tolist(),edges.id_x.tolist())
     G.readonly()
-
-    #ntypes = ['id' for _ in range(n_id_nodes)] + ['geohash' for _ in range(n_geohash_nodes)]
-    #etypes = ['to' for _ in range(len(nodes))]
-    #G = dgl.to_hetero(G,ntypes,etypes)
 
     G = dgl.as_heterograph(G)
 
@@ -182,7 +285,13 @@ if __name__=="__main__":
 
     NPATHS = args.npaths 
 
-    with Pool(mp.cpu_count()) as pp:
-        pp.map(simchunk,range(args.nfiles))
+
+    pool = Pool(mp.cpu_count())
+    for _ in tqdm.tqdm(pool.imap_unordered(simchunk,range(args.nfiles)), total=args.nfiles):
+        pass
+    pool.close()
+    pool.join()
+    #with Pool(mp.cpu_count()) as pp:
+        #pp.map(simchunk,range(args.nfiles))
 
     

@@ -67,19 +67,24 @@ def downSample(paths,nsamples=2,maxpts=100):
 def simchunk(i):
     #print(f'sim chunk {i} of 6000...')
     #need to reset seed to ensure different randomness accross cpus
+    maxpaths_periter = 100
+    iters_per_file = NPATHS//maxpaths_periter
     np.random.seed()
-    npaths = NPATHS
+    npaths = min(NPATHS,maxpaths_periter)
     nsteps = 5000
-    paths = genSamples(npaths,nsteps)
-    nsamples = random.randint(2,3)
-    df = downSample(paths,nsamples=nsamples)
-    df['geohash'] = df.apply(
-        lambda row : gh.encode(row.lat,row.lon,precision=7),axis=1)
+    df = pd.DataFrame(columns=['id','classid','time','lon','lat','geohash'])
+    for _ in range(iters_per_file):
+        paths = genSamples(npaths,nsteps)
+        nsamples = random.randint(2,3)
+        dft = downSample(paths,nsamples=nsamples)
+        dft['geohash'] = dft.apply(
+            lambda row : gh.encode(row.lat,row.lon,precision=7),axis=1)
+        df = df.append(dft)
     df.to_csv('/geosim/simchunks{i}.csv'.format(i=i),index=False)
 
 def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
     """Loads random walk data and converts it into a DGL graph in streaming
-    fashion so minimize RAM usage for large graph creation"""
+    fashion to minimize RAM usage for large graph creation"""
 
     if load:
         with open('/geosim/gdata.pkl','rb') as gpkl:

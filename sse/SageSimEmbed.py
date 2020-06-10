@@ -31,7 +31,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import faiss
 
-from geosim import load_rw_data, load_rw_data_streaming
+from geosim import load_rw_data_streaming
 from torchmodels import *
 
 GPU = faiss.StandardGpuResources()
@@ -153,7 +153,7 @@ class SimilarityEmbedder:
             #embeddings = embeddings[self.is_relevant_mask]
 
             if self.embedding_dim == 2:
-                self.all_embeddings.append(embeddings.detach())
+                self.all_embeddings.append(embeddings.detach()[self.is_relevant_mask])
 
 
             labels = self.labels[self.is_relevant_mask]
@@ -345,7 +345,7 @@ class SimilarityEmbedder:
 
     def animate(self,test_every_n_epochs):
 
-        labelsnp = self.labels.detach().numpy()[self.is_relevant_mask]
+        labelsnp = self.labels[self.is_relevant_mask]
         for i,embedding in enumerate(tqdm.tqdm(self.all_embeddings)):
             data = embedding.cpu().numpy()
             fig = plt.figure(dpi=150)
@@ -399,7 +399,7 @@ if __name__=="__main__":
     argparser.add_argument('--n-classes', type=int, default=10000)
     argparser.add_argument('--p-train', type=float, default=1,
         help="Proportion of labels known at training time")
-    argparser.add_argument('--max-test-labels', type=int, default=500,
+    argparser.add_argument('--max-test-labels', type=int, default=10000,
         help="Maximum number of labels to include in test set, helps with performance \
 since currently relying on all pairwise search for testing.")
     argparser.add_argument('--distance-metric', type=str, default='cosine',

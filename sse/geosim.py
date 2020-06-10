@@ -47,11 +47,11 @@ def genSamples(npaths,nsteps):
     
     return paths
 
-def downSample(paths,nsamples=2,maxpts=100):
+def downSample(paths,nsamples=2,maxpts=100,minpts=2):
     df = pd.DataFrame(columns=['id','classid','time','lon','lat'])
     for sample in range(nsamples):
-        #ndpts = (1-np.random.power(5,size=paths.shape[0])) * maxpts
-        ndpts = [100 for x in range(len(paths))]
+        ndpts = (1-np.random.power(5,size=paths.shape[0])) * maxpts + minpts
+        #ndpts = [100 for x in range(len(paths))]
         for i,path in enumerate(paths):
             n = int(ndpts[i])
             times = np.random.choice(path.shape[0], int(n), replace=False)
@@ -68,7 +68,7 @@ def simchunk(i):
     #print(f'sim chunk {i} of 6000...')
     #need to reset seed to ensure different randomness accross cpus
     maxpaths_periter = 100
-    iters_per_file = NPATHS//maxpaths_periter
+    iters_per_file = max(NPATHS//maxpaths_periter,1)
     np.random.seed()
     npaths = min(NPATHS,maxpaths_periter)
     nsteps = 5000
@@ -152,7 +152,6 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
     classnums.loc[classnums.classid==-1,'label'] = -1
     node_ids = node_ids.merge(classnums,on='classid')
     node_ids = node_ids.sort_values('intID')
-    node_ids.to_csv('./test.csv')
     labels = node_ids.label.tolist()
     labels = np.array(labels,dtype=np.float32)
     
@@ -181,104 +180,6 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
 
     return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node
 
-
-def load_rw_data(classes_to_load,p_train,max_test,save,load):
-    """Loads random walk data and converts it into a DGL graph"""
-
-    if load:
-        with open('../gdata.pkl','rb') as gpkl:
-            data = pickle.load(gpkl)
-        return data
-
-
-    p = pathlib.Path('/geosim/')
-    files = p.glob('simchunks*.csv')
-    df = pd.DataFrame()
-    nclasses = 0
-    geohash_ids = pd.DataFrame(columns=['Nodes'])
-    for f in tqdm.tqdm(files,total=classes_to_load//1000):
-        if nclasses>=classes_to_load:
-            break
-        nclasses += 1000
-        #print(f)
-        i = pd.read_csv(f.__str__())
-        df= df.append(i)
-        #print(len(df))
-        
-    #df = pd.read_csv('C:\code\geosim\simchunk0.csv')
-    df = df.iloc[:,1:]
-    df['idxsample'] = df.apply(
-        lambda row : str(row['sample']) + '_' + row.id,axis=1)
-    df['geohash'] = df.apply(
-        lambda row : gh.encode(row.lat,row.lon,precision=7),axis=1)
-    
-    edges = df[['idxsample','geohash']].groupby(['idxsample','geohash'],
-                            as_index=False).size().reset_index(name='counts')
-
-    nodes = edges.idxsample.unique().tolist()
-    n_id_nodes = len(nodes)
-    nodes = pd.DataFrame(nodes,columns=['Nodes'])
-    nodes['classes'] = nodes.Nodes.apply(lambda x : x[1:])
-    
-    classnums = pd.DataFrame(nodes.classes.unique(),columns=['classes'])
-    classnums['label'] = list(range(len(classnums)))
-    nodes = nodes.merge(classnums,on='classes')
-    
-    nodes = nodes.append(pd.DataFrame(edges.geohash.unique().tolist(),columns=['Nodes']))
-    nodes['id'] = list(range(len(nodes)))
-    
-    edges = edges.merge(nodes,left_on='idxsample',right_on='Nodes')
-    edges = edges.merge(nodes,left_on='geohash',right_on='Nodes')
-    
-    n_geohash_nodes = len(nodes) - n_id_nodes
-
-    G = DGLGraph()
-    G.add_nodes(len(nodes))
-    G.add_edges(edges.id_x.tolist(),edges.id_y.tolist())
-    G.add_edges(edges.id_y.tolist(),edges.id_x.tolist())
-    G.readonly()
-
-    G = dgl.as_heterograph(G)
-
-    edges = edges.merge(nodes,left_on='geohash',right_on='Nodes')
-    
-    embed = nn.Embedding(len(nodes),256)
-    G.ndata['features'] = embed.weight
-    labels = [-1 if np.isnan(x) else x for x in nodes.label.tolist()]
-    labels = th.tensor(labels,dtype=th.long)
-    
-    train_mask =  np.random.choice(
-        a=[False,True],size=(len(nodes)),p=[1-p_train,p_train])
-
-
-    node_counts = nodes.groupby('label',as_index=False).size().reset_index(name='counts')
-    node_counts = node_counts[node_counts.counts>1]
-    test_nodes = node_counts.label.tolist()
-
-    #train_mask = np.array([True] + [False]*5 + [True] + [False]*(len(nodes)-7))
-    p_test = 1
-    test_labels =  np.random.choice(
-        a=list(range(nclasses)),size=min(max_test,nclasses),replace=False)
-
-
-    test_mask = [l in test_labels and l in test_nodes for l in nodes.label.tolist()]
-
-
-    is_relevant_node = np.logical_not(nodes.label.isna().to_numpy())
-    #test_mask = np.logical_not(is_relevant_node)
-    train_mask = np.logical_and(train_mask,is_relevant_node)
-    test_mask = np.logical_and(test_mask,is_relevant_node)
-    #test_mask = np.logical_or(test_mask,train_mask)
-
-    train_mask = [1 if tf else 0 for tf in train_mask]
-    test_mask = [1 if tf else 0 for tf in test_mask]
-
-    if save:
-        with open('gdata.pkl','wb') as gpkl:
-            data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node)
-            pickle.dump(data,gpkl)
-
-    return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node
 
 if __name__=="__main__":
     

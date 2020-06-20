@@ -40,7 +40,8 @@ GPU = faiss.StandardGpuResources()
 class SimilarityEmbedder:
     def __init__(self,rw_data,args):
 
-        self.g, self.embed, self.labels, self.train_mask, self.test_mask, self.nclasses, self.is_relevant_mask = rw_data
+        self.g, self.embed, self.labels, self.train_mask, \
+            self.test_mask, self.nclasses, self.is_relevant_mask, self.node_ids = rw_data
 
         self.ptrain = args.p_train
         print(self.g)
@@ -148,6 +149,8 @@ class SimilarityEmbedder:
             print('computing embeddings for all nodes...')
             embeddings = self.net.inference(self.g, self.features,25000,self.device)
             embeddings_np = embeddings.detach().cpu().numpy()
+            with open('/geosim/embeddings.pkl','wb') as f:
+                pickle.dump(embeddings_np,f)
             test_embeddings_np = embeddings_np[self.test_mask]
             test_labels = self.labels[self.test_mask]
             #embeddings = embeddings[self.is_relevant_mask]
@@ -244,6 +247,7 @@ class SimilarityEmbedder:
 
         print("Test Top5 {:.4f} | Test Top1 {:.4f}".format(
                 testtop5,testtop1))
+        #torch.save(self.net.state_dict(),'/geosim/model_data{}.pt'.format('0'))
         for epoch in range(1,epochs+1):
             
             for step,data in enumerate(self.dataloader):
@@ -302,6 +306,8 @@ class SimilarityEmbedder:
 
                 print("Epoch {:05d} | Loss {:.8f} | Test Top5 {:.4f} | Test Top1 {:.4f}".format(
                         epoch, loss.item(),testtop5,testtop1))                
+
+                #torch.save(self.net.state_dict(),'/geosim/model_data{}.pt'.format(str(epoch)))
 
         self.log_histories(loss_history,top5_history,top1_history,test_every_n_epochs)
         if self.embedding_dim == 2:
@@ -399,7 +405,7 @@ if __name__=="__main__":
     argparser.add_argument('--n-classes', type=int, default=10000)
     argparser.add_argument('--p-train', type=float, default=1,
         help="Proportion of labels known at training time")
-    argparser.add_argument('--max-test-labels', type=int, default=10000,
+    argparser.add_argument('--max-test-labels', type=int, default=100000,
         help="Maximum number of labels to include in test set, helps with performance \
 since currently relying on all pairwise search for testing.")
     argparser.add_argument('--distance-metric', type=str, default='cosine',

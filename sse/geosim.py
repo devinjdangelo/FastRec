@@ -47,7 +47,7 @@ def genSamples(npaths,nsteps):
     
     return paths
 
-def downSample(paths,nsamples=2,maxpts=100,minpts=2):
+def downSample(paths,nsamples=2,maxpts=250,minpts=20):
     df = pd.DataFrame(columns=['id','classid','time','lon','lat'])
     for sample in range(nsamples):
         ndpts = (1-np.random.power(5,size=paths.shape[0])) * maxpts + minpts
@@ -172,13 +172,17 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
     train_mask = [1 if tf else 0 for tf in train_mask]
     test_mask = [1 if tf else 0 for tf in test_mask]
 
+    node_ids = node_ids[['id','intID']]
+
     if save:
         with open('/geosim/gdata.pkl','wb') as gpkl:
-            data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node)
+            data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids)
             pickle.dump(data,gpkl)
 
 
-    return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node
+    return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids
+
+
 
 
 if __name__=="__main__":

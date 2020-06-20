@@ -56,6 +56,7 @@ RUN conda install numpy pandas matplotlib networkx tqdm scikit-learn imageio
 RUN pip install geohash2
 RUN conda install pytorch torchvision cudatoolkit=10.0 faiss-gpu -c pytorch
 RUN conda install -c dglteam dgl-cuda10.0
+RUN pip install fastapi uvicorn
 
 ENV NVIDIA_VISIBLE_DEVICES all
 ENV NVIDIA_DRIVER_CAPABILITIES compute,utility

@@ -42,7 +42,7 @@ def genSamples(npaths,nsteps):
     startpt = np.random.uniform(minLat,maxLat,size=npaths), \
         np.random.uniform(minLon,maxLon,size=npaths)
     startpt = np.array(startpt).T.reshape(npaths,1,DIM)
-    steps = (np.random.rand(npaths,nsteps,DIM)*2 - 1)/5000
+    steps = (np.random.rand(npaths,nsteps,DIM)*2 - 1)/4000
     paths = startpt + steps.cumsum(1)
     
     return paths

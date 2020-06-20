@@ -37,7 +37,18 @@ def read_root():
 
 @app.get("/knn/{hashid}/{k}")
 def knn(hashid: str, k: int = 5):
-    intid = node_ids.loc[node_ids.id == hashid].intID.iloc[0]
+    """Returns to nearest k nodes in the graph based on cosine distance using faiss
+    Args
+    ----
+    hashid : identifier of the query node
+    k : number of neighbors to return
+
+    Returns:
+    K nearest neighbors and cosine similarities"""
+    try:
+        intid = node_ids.loc[node_ids.id == hashid].intID.iloc[0]
+    except IndexError:
+        return {'Error':'ID {} does not exist in the graph'.format(hashid)}
     query = normalized_embeddings[np.newaxis, intid,:]
     D, I = index.search(query,k)
     D = D[0].tolist()
@@ -47,6 +58,17 @@ def knn(hashid: str, k: int = 5):
 
 @app.get("/knn_jacard/{hashid}/{k}")
 def knn(hashid: str, k: int = 5):
+    """Returns the nodes of the same type in a bipartite graph which share
+    the k largest number of nodes of the opposite type.
+
+    Args
+    ----
+    hashid : identifier of the query node
+    k : number of neighbors to return
+
+    Returns
+    -------
+    K nearest neighbors and number of shared nodes"""
     intid = node_ids.loc[node_ids.id == hashid].intID.iloc[0]
     neighbors = np.unique(G.successors(intid).numpy())
     neighbors_2 = [G.successors(i).numpy() for i in neighbors]
@@ -58,6 +80,7 @@ def knn(hashid: str, k: int = 5):
 
     sortme = list(zip(neighbors_2.tolist(),counts_2.tolist()))
     sortme.sort(key=lambda x : -x[1])
+    sortme = sortme[:k]
     neighbors_2, counts_2 = zip(*sortme)
 
     return {"QueryID": hashid, "Nearest Neighbors": neighbors_2,

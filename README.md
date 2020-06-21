@@ -10,6 +10,7 @@ classify or cluster nodes by the pairwise distance between them in the embedding
 Cannot scale since it requires the full graph adjacency matrix for each training step.
 * SageSimEmbed.py uses [GraphSage](https://cs.stanford.edu/people/jure/pubs/graphsage-nips17.pdf) stochastic minibatch training method to scale to arbitrarily large graphs. Adapted from [DGL reference implementation](https://github.com/dmlc/dgl/tree/master/examples/pytorch/graphsage).  
 * geosim.py simulates graph data with arbitrary number of classes and a random number of examples per class between 1-3.
+* SageAPI.py implements an API for faiss index based on similarity embeddings
 
 To replicate the below experiments, clone the repo and cd into it. Then run:
 
@@ -46,3 +47,7 @@ Finally, repeat with only 50% of node classes known at training time. This is no
 Using the GCN aggregator rather than the mean aggregator results in much greater performance of the untrained model. Fine tuning with unsupervised loss and a small number of known labels (10%) results in near 100% accuracy.
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_16_cosine_0.1_0.5.png" alt="drawing" width="500"/>
+
+## Recommender API
+
+Once we have an embedding for all nodes, we can train a faiss index to quickly search for nearest neighbors. Then, a simple API front end can be used to get recommendations of similar nodes. [todo]

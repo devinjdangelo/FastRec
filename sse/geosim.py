@@ -179,8 +179,46 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
             data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids)
             pickle.dump(data,gpkl)
 
+    print('jacard baseline...')
+    baseline_acc(G,labels,is_relevant_node)
 
     return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids
+
+def baseline_acc(G,labels,is_relevant_node):
+    tested = 0
+    maxtotest = min(100000,np.sum(is_relevant_node))
+    top1 = []
+    top5 = []
+    pbar = tqdm.tqdm(total=maxtotest)
+    for intid,l in enumerate(labels):
+        if not is_relevant_node[intid]:
+            continue
+
+        neighbors = np.unique(G.successors(intid).numpy())
+        neighbors_2 = [G.successors(i).numpy() for i in neighbors]
+        neighbors_2 = [np.unique(n) for n in neighbors_2]
+        neighbors_2 = np.concatenate(neighbors_2)
+
+        neighbors_2, counts_2 = np.unique(neighbors_2, return_counts=True)
+
+        sortme = list(zip(neighbors_2.tolist(),counts_2.tolist()))
+        sortme.sort(key=lambda x : -x[1])
+        sortme = sortme[:6]
+        neighbors_2, counts_2 = zip(*sortme)
+        neighbor_labels = [labels[n] for n in neighbors_2]
+
+        top1.append(l == neighbor_labels[1])
+        top5.append(l in neighbor_labels[1:])
+
+        pbar.update(1)
+
+        tested+=1
+        if tested>=maxtotest:
+            break
+
+    pbar.close()
+    print(np.mean(top5),np.mean(top1))
+    return np.mean(top5), np.mean(top1)
 
 
 

@@ -64,6 +64,8 @@ class SimilarityEmbedder:
 
         self.train_nid = np.nonzero(self.train_mask)[0]
         self.test_nid = np.nonzero(self.test_mask)[0]
+        self.test_mask = np.array(self.test_mask,dtype=np.bool)
+        self.train_mask = np.array(self.train_mask,dtype=np.bool)
         #self.train_mask = self.train_mask
         #self.test_mask = self.test_mask
 
@@ -73,7 +75,7 @@ class SimilarityEmbedder:
         self.unsup_loss = CrossEntropyLoss()
         self.unsup_loss.to(self.device)
 
-
+        batch_size = min(len(self.train_nid),args.batch_size)
         cf = lambda i : (self.sup_sampler.sample_blocks(i), self.unsup_sampler.sample_blocks(i))
         self.dataloader = DataLoader(
                             dataset=self.train_nid,

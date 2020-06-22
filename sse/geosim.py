@@ -89,6 +89,8 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
     if load:
         with open('/geosim/gdata.pkl','rb') as gpkl:
             data = pickle.load(gpkl)
+        #print('jacard baseline...')
+        #baseline_acc(data[0],data[2],data[6])
         return data
 
 
@@ -144,7 +146,7 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
     node_ids['intID'] = pd.to_numeric(node_ids['intID'])
     #node_ids = node_ids.sort_values('intID')
 
-    embed = nn.Embedding(len(node_ids),256)
+    embed = nn.Embedding(len(node_ids),512)
     G.ndata['features'] = embed.weight
 
     classnums = pd.DataFrame(node_ids.classid.unique(),columns=['classid'])
@@ -186,7 +188,7 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
 
 def baseline_acc(G,labels,is_relevant_node):
     tested = 0
-    maxtotest = min(100000,np.sum(is_relevant_node))
+    maxtotest = min(10000,np.sum(is_relevant_node))
     top1 = []
     top5 = []
     pbar = tqdm.tqdm(total=maxtotest)

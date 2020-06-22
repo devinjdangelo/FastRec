@@ -51,7 +51,7 @@ class SimilarityEmbedder:
         self.device = args.device
 
 
-        self.net = SAGE(256, args.num_hidden, args.embedding_dim, args.num_layers, F.relu, args.dropout, args.agg_type)
+        self.net = SAGE(512, args.num_hidden, args.embedding_dim, args.num_layers, F.relu, args.dropout, args.agg_type)
         self.net.to(self.device)
         self.features = self.embed.weight
         self.features.to(self.device)
@@ -329,7 +329,7 @@ class SimilarityEmbedder:
         fig.set_size_inches(7, 7, forward=True)
         plt.xlabel('epoch')
         plt.ylabel('loss')
-        plt.savefig('../Results/loss{}_{}_{}_{}_{}_{}.png'.format(
+        plt.savefig('./Results/loss{}_{}_{}_{}_{}_{}.png'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
         plt.close()
 
@@ -346,7 +346,7 @@ class SimilarityEmbedder:
         fig.set_size_inches(7, 7, forward=True)
         plt.xlabel('epoch')
         plt.ylabel('accuracy')
-        plt.savefig('../Results/topn{}_{}_{}_{}_{}_{}.png'.format(
+        plt.savefig('./Results/topn{}_{}_{}_{}_{}_{}.png'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
         plt.close()
 
@@ -370,14 +370,14 @@ class SimilarityEmbedder:
                     continue
                 ax.annotate(label,(data[j,0],data[j,1]))
             #pos = draw(i)  # draw the prediction of the first epoch
-            plt.savefig('../ims/{n}.png'.format(n=i))
+            plt.savefig('./ims/{n}.png'.format(n=i))
             plt.close()
 
-        imagep = pathlib.Path('../ims/')
+        imagep = pathlib.Path('./ims/')
         images = imagep.glob('*.png')
         images = list(images)
         images.sort(key=lambda x : int(str(x).split('/')[-1].split('.')[0]))
-        with imageio.get_writer('../Results/training_{}_{}_{}_{}_{}_{}.gif'.format(
+        with imageio.get_writer('./Results/training_{}_{}_{}_{}_{}_{}.gif'.format(
             self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight), mode='I') as writer:
             for image in images:
                 data = imageio.imread(image.__str__())
@@ -407,7 +407,7 @@ if __name__=="__main__":
     argparser.add_argument('--n-classes', type=int, default=10000)
     argparser.add_argument('--p-train', type=float, default=1,
         help="Proportion of labels known at training time")
-    argparser.add_argument('--max-test-labels', type=int, default=100000,
+    argparser.add_argument('--max-test-labels', type=int, default=1000000,
         help="Maximum number of labels to include in test set, helps with performance \
 since currently relying on all pairwise search for testing.")
     argparser.add_argument('--distance-metric', type=str, default='cosine',

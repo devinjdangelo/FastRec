@@ -24,11 +24,11 @@ def startup_event():
 
     global index
     global normalized_embeddings
-    quantizer = faiss.IndexFlatIP(32)
+    quantizer = faiss.IndexFlatIP(512)
     normalized_embeddings = np.copy(embeddings)
     faiss.normalize_L2(normalized_embeddings)
     #this function operates in place so np.copy any views into a new array before using.
-    index = faiss.IndexIVFFlat(quantizer, 32, 1000)
+    index = faiss.IndexIVFFlat(quantizer, 512, 1000)
     print('training index...')
     index.train(normalized_embeddings)
     print('adding data to index...')

@@ -12,42 +12,73 @@ Cannot scale since it requires the full graph adjacency matrix for each training
 * geosim.py simulates graph data with arbitrary number of classes and a random number of examples per class between 1-3.
 * SageAPI.py implements an API for faiss index based on similarity embeddings
 
-To replicate the below experiments, clone the repo and cd into it. Then run:
+To run this code, all that is needed is docker (or nvidia docker for gpu support). Clone the repo and run the following commands.
 
 * mkdir ./chunks
 * mkdir ./ims
 * docker build -t dgl .
 * ./dockerrun.sh
-* ./run_experiments.sh
 
 ## Results
 
-First experiment has a small number of classes in a 2d embedding space for visualization purposes. The classes of all nodes are known at training time, so this is fully supervised.This uses the mean aggregator.
+First we need to simulate some data
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_20_2_mse_1.0.png" alt="drawing" width="500"/>
+```bash
+python3 ./sse/geosim.py --nfiles 100 --npaths 1000
+```
 
-The below visualizes all nodes in the 2-d embedding space for each epoch in trianing. The numbers next to each dot represent the true class label. The dots of the same class gradually cluster together.
+Then we can build a graph, and generate embeddings for each node.
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/training_20_20_2_mse_1.0.gif" alt="drawing" width="500"/>
+```bash
+python3 ./sse/SageSimEmbed.py \
+--num-epochs 100 --batch-size 1000 \
+--test-every 10 --lr .01 --n-classes 100000 \
+--p-train 0.01 --distance-metric cosine --embedding-dim 512 --num-hidden 512 \
+--sup-weight 0.5 --neg_samples 1 --agg-type gcn --device cpu --save
+```
 
-Training is much faster and more stable (albeit slower on a per epoch basis) using GCN aggregator rather than the mean aggregator. The below plots the same experiment as above just with GCN aggregator instead of mean. The model performs well without any training.
-
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn20_25_2_mse_1.0_1.0.png" alt="drawing" width="500"/>
-
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/training_20_25_2_mse_1.0_1.0.gif" alt="drawing" width="500"/>
-
-Next, test with 10k classes (~180k nodes and 1.3m edges). This graph is too large to fit in the memory of a single gpu without minibatch training. Still, all node classes are known at training time so this is fully supervised.
-
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_32_cosine_1.png" alt="drawing" width="500"/>
-
-Finally, repeat with only 50% of node classes known at training time. This is now semi-supervised training. The accuracy does not improve beyond 50%. 
-
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_32_cosine_0.5.png" alt="drawing" width="500"/>
-
-Using the GCN aggregator rather than the mean aggregator results in much greater performance of the untrained model. Fine tuning with unsupervised loss and a small number of known labels (10%) results in near 100% accuracy.
-
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/Results/topn10000_1000_16_cosine_0.1_0.5.png" alt="drawing" width="500"/>
+The untrained model achieves 95.9% top1 accuracy and 99.4% top5 accuracy vs 75.2% and 93.2% respectively from counting mutual neighbors. The performance does not improve with training unless a substantial fraction of node labels are known at training time (e.g. the training is mostly supervised).
 
 ## Recommender API
 
-Once we have an embedding for all nodes, we can train a faiss index to quickly search for nearest neighbors. Then, a simple API front end can be used to get recommendations of similar nodes. [todo]
+Once we have an embedding for all nodes, we can train a faiss index to quickly search for nearest neighbors. Then, we can query the faiss index via an API to get reccomendations for similar nodes. 
+
+```bash
+uvicorn SageAPI:app
+```
+
+```python
+import requests
+#configure url, default is localhost
+api = 'http://127.0.0.1:8000/{}/{}/{}'
+#this is samplenumber_hash and is found in the simulated data csv files
+example_node = '0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577'
+#how many neighbors to find
+k = 5
+r = requests.get(apiurl.format('knn',nodeid,k))
+r
+{'Nearest Neighbors': ['0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
+                       '1_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
+                       '2_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
+                       '1_f6104461652a1ca6528a0696a1b2cf211cfcb658b8f60e1a3f753b5c73ee4434',
+                       '2_a85539018d2d4365f819f0b102991fbf74132e933a596cf542b190ba3df0d194'],
+ 'QueryID': '0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
+ 'Score': [0.0,
+           0.03939133882522583,
+           0.0400189608335495,
+           0.1584293395280838,
+           0.1703648567199707]}
+
+#we can also query neighbors based on number of mutual neighbors as a baseline
+r = requests.get(apiurl.format('knn_jacard',nodeid,k))
+r
+{...
+ 'N Shared Locations': [38, 30, 21, 21, 20],
+ 'Nearest Neighbors': ['0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
+                       '2_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
+                       '0_360dea129cf0cccb5ce1d590b2217d589de0c4d5e547cbfa5b4478284f939d3d',
+                       '2_c9ad60ed87d3d334bbe7d7a2ea68a7c3c27c76c7ea43cb373bc71a96568abb92',
+                       '1_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577'],
+ 'QueryID': '0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577'}
+
+```

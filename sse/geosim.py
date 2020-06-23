@@ -20,6 +20,7 @@ import pickle
 
 import dgl
 from dgl import DGLGraph
+from dgl.data.utils import save_graphs
 
 import torch as th
 import torch.nn as nn
@@ -88,10 +89,11 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
 
     if load:
         with open('/geosim/gdata.pkl','rb') as gpkl:
-            data = pickle.load(gpkl)
-        #print('jacard baseline...')
-        #baseline_acc(data[0],data[2],data[6])
-        return data
+            G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids = pickle.load(gpkl)
+        print('jacard baseline...')
+        baseline_acc(G,labels,is_relevant_node)
+        
+        return G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids
 
 
     p = pathlib.Path('/geosim/')
@@ -178,7 +180,7 @@ def load_rw_data_streaming(classes_to_load,p_train,max_test,save,load):
 
     if save:
         with open('/geosim/gdata.pkl','wb') as gpkl:
-            data = (G, embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids)
+            data = (G,embed, labels, train_mask, test_mask,nclasses,is_relevant_node, node_ids)
             pickle.dump(data,gpkl)
 
     print('jacard baseline...')

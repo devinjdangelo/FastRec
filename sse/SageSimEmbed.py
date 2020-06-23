@@ -149,7 +149,7 @@ class SimilarityEmbedder:
                 raise ValueError('distance {} is not implemented'.format(self.distance))
 
             print('computing embeddings for all nodes...')
-            embeddings = self.net.inference(self.g, self.features,25000,self.device)
+            embeddings = self.net.inference(self.g, self.features,1000,self.device)
             embeddings_np = embeddings.detach().cpu().numpy()
             with open('/geosim/embeddings.pkl','wb') as f:
                 pickle.dump(embeddings_np,f)

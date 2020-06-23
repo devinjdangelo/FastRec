@@ -17,7 +17,7 @@ To run this code, all that is needed is docker (or nvidia docker for gpu support
 * mkdir ./chunks
 * mkdir ./ims
 * docker build -t dgl .
-* ./dockerrun.sh
+* ./dockerrun.sh (you can change where the simulated data will be stored by changing which directory is mounted to '/geosim' in the container)
 
 ## Results
 
@@ -43,9 +43,13 @@ The untrained model achieves 95.9% top1 accuracy and 99.4% top5 accuracy vs 75.2
 
 Once we have an embedding for all nodes, we can train a faiss index to quickly search for nearest neighbors. Then, we can query the faiss index via an API to get reccomendations for similar nodes. 
 
+To test on localhost, you can leave all args as default.
+
 ```bash
 uvicorn SageAPI:app
 ```
+
+Then simply send a request using the id of the node set by geosim.py.
 
 ```python
 import requests

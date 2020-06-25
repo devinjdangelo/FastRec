@@ -38,157 +38,115 @@ GPU = faiss.StandardGpuResources()
 
    
 class SimilarityEmbedder:
-    def __init__(self,rw_data,args):
+    def __init__(self,distance):
+        
 
-        self.g, self.embed, self.labels, self.train_mask, \
-            self.test_mask, self.nclasses, self.is_relevant_mask, self.node_ids = rw_data
+        self.distance_metric = distance
+        if self.distance_metric == 'cosine':
+            self.distance_function = lambda t1,t2 : F.cosine_embedding_loss(t1,
+                                                t2,
+                                                th.ones(t1.shape[0]).to(self.device),reduce=False)
+        elif self.distance_metric == 'mse':
+            self.distance_function = lambda t1,t2 : th.sum(F.mse_loss(t1,t2,reduce=False),dim=1)
+        else:
+            raise ValueError('distance {} is not implemented'.format(self.distance))
 
-        self.ptrain = args.p_train
-        print(self.g)
+        self._embeddings = None 
+        self._index = None 
 
-        self.embedding_dim = args.embedding_dim
-        self.distance = args.distance_metric
-        self.device = args.device
+    def get_embeddings(self, batch_size=None):
+        """Updates all node embeddings if needed and returns the embeddings
+        
+        Args
+        ----
+        batch_size : how many nodes to include per batch, defaults to self.batch_size
+        save_dir : which directory to save embeddings to, does not save to disk if None 
 
+        Returns
+        -------
+        embeddings node x embedding_dim tensor"""
 
-        self.net = SAGE(512, args.num_hidden, args.embedding_dim, args.num_layers, F.relu, args.dropout, args.agg_type)
-        self.net.to(self.device)
-        self.features = self.embed.weight
-        self.features.to(self.device)
-        self.embed.to(self.device)
-        #self.labels.to(self.device)
-        self.optimizer = th.optim.Adam(it.chain(self.net.parameters(),self.embed.parameters()), lr=args.lr)
-
-        self.sup_sampler = NeighborSampler(self.g, [int(fanout) for fanout in args.fan_out.split(',')])
-        self.unsup_sampler = UnsupervisedNeighborSampler(self.g, [int(fanout) for fanout in args.fan_out.split(',')],args.neg_samples)
-
-        self.train_nid = np.nonzero(self.train_mask)[0]
-        self.test_nid = np.nonzero(self.test_mask)[0]
-        self.test_mask = np.array(self.test_mask,dtype=np.bool)
-        self.train_mask = np.array(self.train_mask,dtype=np.bool)
-        #self.train_mask = self.train_mask
-        #self.test_mask = self.test_mask
-
-        self.batch_size = args.batch_size
-        self.sup_weight = args.sup_weight
-
-        self.unsup_loss = CrossEntropyLoss()
-        self.unsup_loss.to(self.device)
-
-        batch_size = min(len(self.train_nid),args.batch_size)
-        cf = lambda i : (self.sup_sampler.sample_blocks(i), self.unsup_sampler.sample_blocks(i))
-        self.dataloader = DataLoader(
-                            dataset=self.train_nid,
-                            batch_size=args.batch_size,
-                            collate_fn=cf,
-                            shuffle=True,
-                            drop_last=True,
-                            num_workers=args.num_workers)
-
-        if self.embedding_dim == 2:
-            self.all_embeddings = []
+        if self._embeddings is None:
+            batch_size = batch_size if batch_size is not None else self.batch_size
+            print('computing embeddings for all nodes...')
+            with th.no_grad():
+                self._embeddings = self.net.inference(self.g, self.features,batch_size,self.device).detach().cpu().numpy()
+        return self._embeddings
 
 
-        #print('setting up pairwise loss tensors...')
-        #self.setup_pairwise_loss_tensors()
-        #print('setting up pairwise eval tensors...')
-        #self.setup_pairwise_eval_tensors()
-        #print('done!')
+    def get_index(self,use_gpu=False):
+        """Creates a faiss index for similarity searches over the node embeddings
 
-    def setup_pairwise_loss_tensors(self,labelsnp):
-        idx1 = []
-        idx2 = []
-        target = []
-        for i,l in enumerate(labelsnp):
-            ids = list(range(len(labelsnp)))
-            for j,other in zip(ids[i+1:],labelsnp[i+1:]):
-                if other==l:
-                    idx1.append(i)
-                    idx2.append(j)
-                    target.append(1)
-                else:
-                    idx1.append(i)
-                    idx2.append(j)
-                    target.append(-1)
+        Args
+        ----
+        embeddings : the embeddings to add to faiss index
+        use_gpu : whethern to store the index on gpu and use gpu for compute
 
-        return idx1, idx2, target
+        Returns
+        -------
+        a faiss index of input embeddings"""
 
+        if self._index is None:
+            embeddings = self.get_embeddings()
+            if self.distance=='cosine':
+                self._index  = faiss.IndexFlatIP(self.embedding_dim)
+                normalized_embeddings = np.copy(embeddings)
+                #this function operates in place so np.copy any views into a new array before using.
+                faiss.normalize_L2(normalized_embeddings)
+                embeddings = normalized_embeddings
+            elif self.distance=='mse':
+                index = faiss.IndexFlatL2(self.embedding_dim)
 
-    def setup_pairwise_eval_tensors(self):
-        test_labels = self.labels[self.test_mask]
-        labelsnp = self.labels[self.is_relevant_mask]
+            if use_gpu:
+                index = faiss.index_cpu_to_gpu(GPU, 0, index)
 
-        self.test_idx = []
-        self.test_idx2 = []
-        for i,test_label in enumerate(tqdm.tqdm(labelsnp)):
-            if not self.test_mask[i]:
-                continue
-            else:
-                for j,label in enumerate(labelsnp):
-                    if not self.is_relevant_mask[j]:
-                        continue
-                    if i!=j:
-                        self.test_idx.append(i)
-                        self.test_idx2.append(j)
+            index.add(embeddings)
 
-        print(len(self.test_idx),len(self.test_idx2))
+        return self._index
+
+    def get_neighbors(self,inputs,k,label_nodes=True):
+        """Returns the k nearest neighbors of inputs
+
+        Args
+        ----
+        inputs : the vectors to search against the faiss index
+        k : how many neighbors to lookup
+        label_nodes : lookup labels of nodes or just return integer ids
+
+        Returns
+        -------
+        D, I distance numpy array and neighbors array from faiss"""
+
+        index = self.get_index()
+        D, I = index.search(inputs,k)
+        if label_nodes:
+            #lookup node labels
+            pass
+
+        return D,I
 
 
 
     def evaluate(self):
+        """Evaluates performance of current embeddings
+
+        Returns
+        -------
+        P at least 1 correct neighbors are in top5, and top1 respectively"""
         self.net.eval()
-        with th.no_grad():
-            #loss = pairwise_cosine_distance_loss(embeddings,labels,mask,device)
-            if self.distance=='cosine':
-                dist = lambda t1,t2 : F.cosine_embedding_loss(t1,
-                                                t2,
-                                                th.ones(t1.shape[0]).to(self.device),reduce=False)
-            elif self.distance=='mse':
-                dist = lambda t1,t2 : th.sum(F.mse_loss(t1,t2,reduce=False),dim=1)
-            else:
-                raise ValueError('distance {} is not implemented'.format(self.distance))
+        test_labels = self.labels[self.test_mask]
+        labels = self.labels[self.is_relevant_mask]
 
-            print('computing embeddings for all nodes...')
-            embeddings = self.net.inference(self.g, self.features,1000,self.device)
-            embeddings_np = embeddings.detach().cpu().numpy()
-            with open('/geosim/embeddings.pkl','wb') as f:
-                pickle.dump(embeddings_np,f)
-            test_embeddings_np = embeddings_np[self.test_mask]
-            test_labels = self.labels[self.test_mask]
-            #embeddings = embeddings[self.is_relevant_mask]
+        index = self.get_index()
+        test_embeddings = self.get_embeddings()[self.test_mask]
+        _, I = self.get_neighbors(test_embeddings,6,label_nodes=False)
 
-            if self.embedding_dim == 2:
-                self.all_embeddings.append(embeddings.detach()[self.is_relevant_mask])
-
-
-            labels = self.labels[self.is_relevant_mask]
-
-            t = time.time()
-            if self.distance=='cosine':
-                index = faiss.IndexFlatIP(self.embedding_dim)
-                index = faiss.index_cpu_to_gpu(GPU, 0, index)
-                normalized_embeddings = np.copy(embeddings_np[self.is_relevant_mask])
-                #this function operates in place so np.copy any views into a new array before using.
-                faiss.normalize_L2(normalized_embeddings)
-                index.add(normalized_embeddings)
-                normalized_search = np.copy(test_embeddings_np)
-                faiss.normalize_L2(normalized_search)
-                D, I = index.search(normalized_search,5+1)
-            elif self.distance=='mse':
-                index = faiss.IndexFlatL2(self.embedding_dim)
-                index = faiss.index_cpu_to_gpu(GPU, 0, index)
-                index.add(embeddings_np[self.is_relevant_mask])
-                D, I = index.search(test_embeddings_np,5+1)
-
-            index.reset() #free gpu memory
-            ft1, ft5 = [], []
-            for node, neighbors in enumerate(I):
-                label = test_labels[node]
-                neighbor_labels = [labels[n] for n in neighbors[1:]]
-                ft1.append(label==neighbor_labels[0])
-                ft5.append(label in neighbor_labels)
-            #print(D,I)
-            print('faiss search done in {} seconds'.format(time.time() - t))
+        ft1, ft5 = [], []
+        for node, neighbors in enumerate(I):
+            label = test_labels[node]
+            neighbor_labels = [labels[n] for n in neighbors[1:]]
+            ft1.append(label==neighbor_labels[0])
+            ft5.append(label in neighbor_labels)
 
         return np.mean(ft5), np.mean(ft1)
 

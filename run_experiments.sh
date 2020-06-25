@@ -1,47 +1,26 @@
-python3 geosim.py --npaths 10 --nfiles 100
-
-python3 SageSimEmbed.py \
---num-epochs 150 --batch-size 25 \
---test-every 1 --lr .01 --n-classes 20 \
---p-train 1 --distance-metric mse --embedding-dim 2 \
---sup-weight 1 --neg_samples 10 --agg-type gcn
-
-python3 SageSimEmbed.py \
---num-epochs 150 --batch-size 25 \
---test-every 1 --lr .01 --n-classes 20 \
---p-train 1 --distance-metric mse --embedding-dim 2 \
+python3 ./sse/SageSimEmbed.py \
+--num-epochs 100 --batch-size 99 \
+--test-every 10 --lr .01 --n-classes 10000 \
+--p-train 0.01 --distance-metric cosine --embedding-dim 512 --num-hidden 512 \
 --sup-weight 0 --neg_samples 1 --agg-type gcn
 
-python3 SageSimEmbed.py \
---num-epochs 300 --batch-size 25 \
---test-every 25 --lr .01 --n-classes 40 \
---p-train 0.5 --distance-metric mse --embedding-dim 2 \
---sup-weight 1 --neg_samples 10 --agg-type gcn
-
-python3 SageSimEmbed.py \
---num-epochs 1000 --batch-size 25 \
---test-every 25 --lr .01 --n-classes 40 \
---p-train 0.5 --distance-metric mse --embedding-dim 2 \
---sup-weight 0.5 --neg_samples 10 --agg-type gcn
-
-python3 SageSimEmbed.py \
+python3 ./sse/SageSimEmbed.py \
 --num-epochs 100 --batch-size 1000 \
---test-every 10 --lr .01 --n-classes 10000 \
---p-train 0.1 --distance-metric cosine --embedding-dim 16 \
---sup-weight 0.5 --neg_samples 1 --agg-type gcn
+--test-every 10 --lr .01 --n-classes 100000 \
+--p-train 0.01 --distance-metric cosine --embedding-dim 512 --num-hidden 512 \
+--sup-weight 0.5 --neg_samples 1 --agg-type gcn --device cpu --save
 
-python3 SageSimEmbed.py \
+
+python3 ./sse/SageSimEmbed.py \
 --num-epochs 100 --batch-size 1000 \
---test-every 10 --lr .01 --n-classes 20000 \
---p-train 0.05 --distance-metric cosine --embedding-dim 16 \
---sup-weight 0.5 --neg_samples 1 --agg-type gcn
+--test-every 10 --lr .01 --n-classes 300000 \
+--p-train 0.01 --distance-metric cosine --embedding-dim 512 --num-hidden 512 \
+--sup-weight 0.5 --neg_samples 1 --agg-type gcn --device cpu --load --save
 
-
-python3 geosim.py --npaths 1000 --nfiles 1000
-
-python3 SageSimEmbed.py \
+python3 ./sse/SageSimEmbed.py \
 --num-epochs 100 --batch-size 1000 \
---test-every 10 --lr .01 --n-classes 500000 \
---p-train 0.01 --distance-metric cosine --embedding-dim 16 \
---sup-weight 0.5 --neg_samples 1 --agg-type gcn --max-test-labels 500000 --save
+--test-every 10 --lr .01 --n-classes 600000 \
+--p-train 0.01 --distance-metric cosine --embedding-dim 512 --num-hidden 512 \
+--sup-weight 0.5 --neg_samples 1 --agg-type gcn --device cpu --save \
+--max-test-labels 100000
 

@@ -34,12 +34,54 @@ import faiss
 from geosim import load_rw_data_streaming
 from torchmodels import *
 
-GPU = faiss.StandardGpuResources()
-
-   
+  
 class SimilarityEmbedder:
-    def __init__(self,distance):
+    def __init__(self, embedding_dim,
+                        feature_dim = None,
+                        hidden_dim = None,
+                        hidden_layers = 2,
+                        dropout = 0,
+                        agg_type = 'gcn',
+                        distance = 'cosine',
+                        device = 'cpu',
+                        faiss_gpu = False,
+                        inference_batch_size = 10000,
+                        p_train = 1):
+    """Generates embeddings for graph data such that embeddings close by a given distance metric are
+    'similar'. Embeddings can be used to predict which nodes belong to the same class. The embeddings can be
+    trained with triplet loss in a fully supervised, semi-supervised or fully unsupervised manner. GraphSage
+    is used to allow minibatch training. Uses faiss index to allow extremely fast query times for most similar
+    nodes to a query node even for graphs with billions of nodes. Memory is likely to be the limiting factor before
+    query times. 
+
+    Args
+    ----
+    embedding_dim : the dimension of the final output embedding used for similarity search
+    feature_dim : the dimension of the input node features, currently only allowed to be 
+                    a trainable embedding. In the future should allow external node features.
+                    defaults to 2*hidden_dim
+    hidden_dim : the dimension of the intermediate hidden layers, defaults to 2*embedding dim.
+    hidden_layers : number of hidden layers. Embeddings can collpase to a single value if this 
+                    is set too high. Defaults to 2.
+    dropout : whether to apply a dropout layer after hidden layers of GraphSAge. Defaults to 0,
+                which means there is no Dropout applied.
+    agg_type : aggregation function to apply to GraphSage. Valid options are 'mean', 'lstm', and 'gcn'
+               aggregation. See GraphSage paper for implementation details. Defaults to gcn which performs
+               well for untrained networks.
+    distance : distance metric to use for similarity search. Valid options are mse and cosine. Defaults to cosine.
+    device : computation device to place pytorch tensors on. Valid options are any valid pytorch device. Defaults 
+            to cpu.
+    faiss_gpu : whether to use gpu to accelerate faiss searching. Note that it will compete with pytorch for gpu memory.
+    inference_batch_size : number of nodes to compute per batch when computing all embeddings with self.net.inference.
+                            defaults to 10000 which should comfortably fit on most gpus and be reasonably efficient on cpu.
+    p_train : the proportion of nodes with known class labels to use for training defaults to 1 
+    """
         
+        self.embedding_dim = embedding_dim
+        self.device = device 
+        self.inference_batch_size = inference_batch_size
+        assert p_train<=1 and p_train>=0
+        self.p_train = p_train
 
         self.distance_metric = distance
         if self.distance_metric == 'cosine':
@@ -51,11 +93,117 @@ class SimilarityEmbedder:
         else:
             raise ValueError('distance {} is not implemented'.format(self.distance))
 
+        hidden_dim = embedding_dim*2 if hidden_dim is None else hidden_dim
+        feature_dim = hidden_dim*2 if feature_dim is None else hidden_dim
+        self.net = SAGE(feature_dim, hidden_dim, embedding_dim, hidden_layers, F.relu, dropout, agg_type)
+        self.net.to(self.device)
+
         self._embeddings = None 
         self._index = None 
+        self._masks_set = False
+        self._training_setup = False
 
-    def get_embeddings(self, batch_size=None):
-        """Updates all node embeddings if needed and returns the embeddings
+        self.node_ids = pd.DataFrame(columns=['id','intID','classid'])
+        self.G = DGLGraph()
+
+
+    def add_data(edgelist, nodeid1, nodeid2, classid1=None, classid2=None):
+    """Updates graph data with a new edgelist. Maps each nodeid to an integer id. 
+    input nodeids can be any unique identifier (strings, floats, integers ect...).
+    They will internally be mapped to a sequential integer id which DGL uses. self.nodeids
+    keeps track of the mappings between input identifiers and the sequential integer ids.
+    If you run out of memory when calling this method, split edglist into chunks and call
+    this method once for each chunk.
+
+    Args
+    ----
+    edgelist : dataframe with edges between nodes, edges are assumed to be bidrectional and 
+                should only be in the dataframe once (e.g. a <-> b means do not include b <-> a)
+    nodeid1 : column name in edgelist which uniquely identifies node1
+    nodeid2 : columns name in edgelist which uniquely identifies node2
+    classid1 : optional column name in edgelist which assigns a class to node1
+    classid2 : optional column name in edgelist which assigns a class to node2
+    p_train : proportion of newly added nodes which have an assigned class to use in training set
+    p_test : proportion of newly added nodes which have an assigned class to use in testing set"""
+
+        if classid1 is not None or classid2 is not None:
+            assert classid1 is not None and classid2 is not None
+        else:
+            classid1 = 'classid1'
+            classid2 = 'classid2'
+            edgelist[classid1] = None 
+            edgelist[classid2] = None
+
+        edgelist = edgelist[[nodeid1,nodeid2,classid1,classid2]]
+        
+        nodes = pd.concat([edgelist[[nodeid1,classid1]].drop_duplicates(),
+                            edgelist[[nodeid2,classid21]].drop_duplicates()])
+
+        nodes = nodes.merge(self.node_ids)
+        nodes.columns = ['id', 'classid']
+        nodes = nodes.merge(node_ids,on='id',how='left',suffixes=('','_merged'))
+        num_new_nodes = int(nodes.intID.isna().sum())
+        current_maximum_id = node_ids.intID.max()
+        start = (current_maximum_id+1)
+        if np.isnan(start):
+            start = 0
+        end = start + num_new_nodes
+        new_nodes = pd.isna(nodes.intID)
+        nodes.loc[new_nodes,'intID'] = list(range(start,end))
+        update_nodes = nodes[new_nodes]
+        update_nodes = update_nodes[['id','intID','classid']]
+        self.node_ids = pd.concat([self.node_ids,update_nodes])
+
+        edgelist = edgelist.merge(nodes,left_on=nodeid1,right_on='id',how='left')
+        edgelist = edgelist.merge(nodes,left_on=nodeid2,right_on='id',how='left',suffixes=('','2'))
+        edgelist = edgelist[['intID','intID2']]
+
+        self.G.readonly(False)
+        self.G.add_nodes(num_new_nodes)
+        self.G.add_edges(edges.intID.tolist(),edges.intID2.tolist())
+        self.G.add_edges(edges.intID2.tolist(),edges.intID.tolist())
+        self.G.readonly()
+
+        #reset internal flag that embeddings and index need to be recomputed
+        self._embeddings = None 
+        self._index = None 
+        self._masks_set = False
+        self._training_setup = False
+
+    def set_masks(self):
+        """Sets train, test, and relevance masks. Needs to be called once after data as been added to graph.
+        self.train and self.evaluate automatically check if this needs to be called and will call it, but
+        it can also be called manually. Can be called a second time manually to reroll the random generation
+        of the train and test sets."""
+
+        self.node_ids = self.node_ids.sort_values('intID')
+        self.labels = self.node_ids.classid
+
+        #is relevant mask indicates the nodes which we know the class of
+        self.is_relevant_mask = pd.isna(self.node_ids.classid)
+
+        self.train_mask =  np.random.choice(
+        a=[False,True],size=(len(node_ids)),p=[1-self.p_train,self.p_train])
+
+        #test set is all nodes other than the train set unless train set is all
+        #nodes and then test set is the same as train set.
+        if self.p_train != 1:
+            self.test_mask = np.logical_not(self.train_mask)
+        else:
+            self.test_mask = self.train_mask
+
+        #do not include any node without a classid in either set
+        self.train_mask = np.logical_and(self.train_mask,self.is_relevant_mask)
+        self.test_mask = np.logical_and(self.test_mask,self.is_relevant_mask)
+
+        self._masks_set = True
+
+
+
+    @property
+    def embeddings(self):
+        """Updates all node embeddings if needed and returns the embeddings.
+        Simple implementation of a cached property.
         
         Args
         ----
@@ -73,9 +221,10 @@ class SimilarityEmbedder:
                 self._embeddings = self.net.inference(self.g, self.features,batch_size,self.device).detach().cpu().numpy()
         return self._embeddings
 
-
-    def get_index(self,use_gpu=False):
-        """Creates a faiss index for similarity searches over the node embeddings
+    @property
+    def index(self):
+        """Creates a faiss index for similarity searches over the node embeddings.
+        Simple implementation of a cached property.
 
         Args
         ----
@@ -87,25 +236,26 @@ class SimilarityEmbedder:
         a faiss index of input embeddings"""
 
         if self._index is None:
-            embeddings = self.get_embeddings()
             if self.distance=='cosine':
                 self._index  = faiss.IndexFlatIP(self.embedding_dim)
-                normalized_embeddings = np.copy(embeddings)
+                normalized_embeddings = np.copy(self.embeddings)
                 #this function operates in place so np.copy any views into a new array before using.
                 faiss.normalize_L2(normalized_embeddings)
                 embeddings = normalized_embeddings
             elif self.distance=='mse':
-                index = faiss.IndexFlatL2(self.embedding_dim)
+                self._index = faiss.IndexFlatL2(self.embedding_dim)
+                embeddings = self.embeddings
+            if self.faiss_gpu:
+                GPU = faiss.StandardGpuResources()
+                self._index = faiss.index_cpu_to_gpu(GPU, 0, index)
 
-            if use_gpu:
-                index = faiss.index_cpu_to_gpu(GPU, 0, index)
-
-            index.add(embeddings)
+            self._index.add(embeddings)
 
         return self._index
 
-    def get_neighbors(self,inputs,k,label_nodes=True):
-        """Returns the k nearest neighbors of inputs
+    def _search_index(self,inputs,k,label_nodes=True):
+        """Directly searches the faiss index and 
+        returns the k nearest neighbors of inputs
 
         Args
         ----
@@ -116,48 +266,94 @@ class SimilarityEmbedder:
         Returns
         -------
         D, I distance numpy array and neighbors array from faiss"""
-
-        index = self.get_index()
-        D, I = index.search(inputs,k)
+        if self.distance_metric == 'cosine':
+            inputs = np.copy(inputs)
+            faiss.normalize_l2(inputs)
+        D, I = self.index.search(inputs,k)
         if label_nodes:
-            #lookup node labels
-            pass
-
+            #replace every integer id with corresponding nodeid
+            #would be faster as a merge but this seems ok
+            I = [self.node_ids.loc[self.node_ids.intID==i].id.iloc[0] for i in I]
         return D,I
 
-
-
-    def evaluate(self):
+    def evaluate(self, test_only=False):
         """Evaluates performance of current embeddings
+
+        Args
+        ----
+        test_only : whether to only test the performance on the test set. If 
+                    false, all nodes with known class will be tested.
 
         Returns
         -------
         P at least 1 correct neighbors are in top5, and top1 respectively"""
         self.net.eval()
-        test_labels = self.labels[self.test_mask]
-        labels = self.labels[self.is_relevant_mask]
 
-        index = self.get_index()
-        test_embeddings = self.get_embeddings()[self.test_mask]
-        _, I = self.get_neighbors(test_embeddings,6,label_nodes=False)
+        if not self._masks_set:
+            self.set_masks()
+
+        mask = self.test_mask if test_only else self.is_relevant_mask
+        test_labels = self.labels[mask]
+
+        test_embeddings = self.embeddings[self.test_mask]
+        _, I = self._search_index(test_embeddings,6,label_nodes=False)
 
         ft1, ft5 = [], []
         for node, neighbors in enumerate(I):
             label = test_labels[node]
-            neighbor_labels = [labels[n] for n in neighbors[1:]]
+            neighbor_labels = [self.labels[n] for n in neighbors[1:]]
             ft1.append(label==neighbor_labels[0])
             ft5.append(label in neighbor_labels)
 
         return np.mean(ft5), np.mean(ft1)
 
-    def pairwise_distance_loss(self,embeddings,seeds,labels):
+    @staticmethod
+    def setup_pairwise_loss_tensors(labelsnp):
+        """Accepts a list of labels and sets up indexers which can be used
+        in a triplet loss function along with whether each pair is a positive or
+        negative example.
+
+        Args
+        ----
+        labelsnp : numpy array of labels
+
+        Returns
+        -------
+        idx1 : indexer array for left side comparison
+        idx2 : indexer array for right side comparison
+        target : array indicating whether left and right side are the same or different"""
+
+        idx1 = []
+        idx2 = []
+        target = []
+        for i,l in enumerate(labelsnp):
+            ids = list(range(len(labelsnp)))
+            for j,other in zip(ids[i+1:],labelsnp[i+1:]):
+                if other==l:
+                    idx1.append(i)
+                    idx2.append(j)
+                    target.append(1)
+                else:
+                    idx1.append(i)
+                    idx2.append(j)
+                    target.append(-1)
+
+        return idx1, idx2, target
+
+    def triplet_loss(self,embeddings,labels):
+        """For a given tensor of embeddings and corresponding labels, 
+        returns a triplet loss maximizing distance between negative examples
+        and minimizing distance between positive examples
+
+        Args
+        ----
+        embeddings : pytorch tensor of embeddings to be trained
+        labels : labels indicating which embeddings are equivalent"""
         
-        batch_relevant_nodes = [i for i,l in enumerate(labels) if l!=-1]
+        batch_relevant_nodes = [i for i,l in enumerate(labels) if pd.isna(l)]
         embeddings = embeddings[batch_relevant_nodes]
         labels = labels[batch_relevant_nodes]
         idx1,idx2,target = self.setup_pairwise_loss_tensors(labels)
-
-
 
         losstarget = th.tensor(target).to(self.device)
 
@@ -191,26 +387,57 @@ class SimilarityEmbedder:
 
         return loss 
 
-    def train(self,epochs,test_every_n_epochs):
+    def setup_for_training(self):
 
-        loss_history = []
-        top5_history = []
-        top1_history = []
+        self.embed = nn.Embedding(len(self.node_ids),self.feature_dim)
+        self.G.ndata['features'] = embed.weight
+        self.features = self.embed.weight
+        self.features.to(self.device)
+        self.embed.to(self.device)
 
+    def train(self,epochs,
+                    batch_size,
+                    test_every_n_epochs = 1,
+                    supervised_loss_weight = 1,
+                    learning_rate = 1e-2,
+                    fanouts = [10,25],
+                    neg_samples = 1
+                    ):
 
-        dur = []
-        if self.embedding_dim == 2:
-            self.all_embeddings = []
-        t = time.time()
-        testtop5,testtop1 = self.evaluate()
-        print('Eval {}'.format(time.time()-t))
+        if not self._masks_set:
+            self.set_masks()
+
+        if not self._training_setup:
+            self.setup_for_training()
+
+        optimizer = th.optim.Adam(it.chain(self.net.parameters(),self.embed.parameters()), lr=learning_rate)
+        sup_sampler = NeighborSampler(self.G, [int(fanout) for fanout in args.fan_out.split(',')])
+        unsup_sampler = UnsupervisedNeighborSampler(self.G, [int(fanout) for fanout in fanouts.split(',')],neg_samples)
+        joint_sampler = lambda i : (sup_sampler.sample_blocks(i), unsup_sampler.sample_blocks(i))
+        dataloader = DataLoader(
+                            dataset=np.nonzero(self.train_mask)[0],
+                            batch_size=batch_size,
+                            collate_fn=joint_sampler,
+                            shuffle=True,
+                            drop_last=True,
+                            num_workers=1)
+
+        unsup_loss_fn = CrossEntropyLoss()
+        unsup_loss_fn.to(self.device)
+
+        
+        testtop5,testtop1 = self.evaluate(test_only=True)
 
         print("Test Top5 {:.4f} | Test Top1 {:.4f}".format(
                 testtop5,testtop1))
-        #torch.save(self.net.state_dict(),'/geosim/model_data{}.pt'.format('0'))
+
+        loss_history = []
+        top5_history = [testtop5]
+        top1_history = [testtop1]
+
         for epoch in range(1,epochs+1):
             
-            for step,data in enumerate(self.dataloader):
+            for step,data in enumerate(dataloader):
                 sup_blocks, unsupervised_data = data 
                 pos_graph, neg_graph, unsup_blocks = unsupervised_data
 
@@ -222,171 +449,48 @@ class SimilarityEmbedder:
                 # output their embeddings based on their neighbors...
                 # the neighbors are the inputs in the sense that they are what we
                 # use to generate the embedding for the seeds.
-                if self.sup_weight>0:
+                if supervised_loss_weight>0:
                     sup_input_nodes = sup_blocks[0].srcdata[dgl.NID]
                     sup_seeds = sup_blocks[-1].dstdata[dgl.NID]
 
-                    sup_batch_inputs = self.g.ndata['features'][sup_input_nodes].to(self.device)
+                    sup_batch_inputs = self.G.ndata['features'][sup_input_nodes].to(self.device)
                     sup_batch_labels = self.labels[sup_seeds]
 
                     sup_embeddings = self.net(sup_blocks, sup_batch_inputs)
 
-                    sup_loss = self.pairwise_distance_loss(sup_embeddings,sup_seeds,sup_batch_labels)
+                    sup_loss = self.triplet_loss(sup_embeddings,sup_seeds,sup_batch_labels)
 
-                if self.sup_weight < 1:
+                if supervised_loss_weight < 1:
                     unsup_input_nodes = unsup_blocks[0].srcdata[dgl.NID]
                     unsup_seeds = unsup_blocks[-1].dstdata[dgl.NID]
 
-                    unsup_batch_inputs = self.g.ndata['features'][unsup_input_nodes].to(self.device)
+                    unsup_batch_inputs = self.G.ndata['features'][unsup_input_nodes].to(self.device)
 
                     unsup_embeddings =self.net(unsup_blocks,unsup_batch_inputs)
-                    unsup_loss = self.unsup_loss(unsup_embeddings, pos_graph, neg_graph)
+                    unsup_loss = unsup_loss_fn(unsup_embeddings, pos_graph, neg_graph)
 
-                if self.sup_weight==1:
+                if supervised_loss_weight==1:
                     loss = sup_loss 
-                elif self.sup_weight==0:
+                elif supervised_loss_weight==0:
                     loss = unsup_loss
                 else:
                     loss = self.sup_weight * sup_loss + (1 - self.sup_weight) * unsup_loss
                 
-                self.optimizer.zero_grad()
+                optimizer.zero_grad()
                 loss.backward()
-                self.optimizer.step()
-                th.cuda.empty_cache()
-
+                optimizer.step()
 
                 print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f} | Mem+Maxmem {:.3f} / {:.3f}".format(
                         epoch, step, loss.item(), th.cuda.memory_allocated()/(1024**3),th.cuda.max_memory_allocated()/(1024**3)))
             
             loss_history.append(loss.item())
             if epoch % test_every_n_epochs == 0 or epoch==epochs:
-                testtop5,testtop1 = self.evaluate()
+                testtop5,testtop1 = self.evaluate(test_only=True)
                 top5_history.append(testtop5)
                 top1_history.append(testtop1)
 
                 print("Epoch {:05d} | Loss {:.8f} | Test Top5 {:.4f} | Test Top1 {:.4f}".format(
                         epoch, loss.item(),testtop5,testtop1))                
 
-                #torch.save(self.net.state_dict(),'/geosim/model_data{}.pt'.format(str(epoch)))
-
-        self.log_histories(loss_history,top5_history,top1_history,test_every_n_epochs)
-        if self.embedding_dim == 2:
-            self.animate(test_every_n_epochs)
-
-    def log_histories(self,loss,top5,top1,test_every_n_epochs):
-        loss_epochs = list(range(len(loss)))
-        test_epochs = list(range(0,len(loss),test_every_n_epochs))
-
-        fig = plt.figure()
-        ax = fig.subplots()
-        plt.title('Triplet {} Loss by Training Epoch'.format(self.distance))
-        #fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
-            #self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
-        plt.scatter(loss_epochs,loss)
-        plt.plot(loss_epochs,loss)
-        fig.set_size_inches(7, 7, forward=True)
-        plt.xlabel('epoch')
-        plt.ylabel('loss')
-        plt.savefig('./Results/loss{}_{}_{}_{}_{}_{}.png'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
-        plt.close()
-
-        fig = plt.figure()
-        ax = fig.subplots()
-        plt.title('Test Inference Accuracy'.format(self.distance))
-        #fig.text(.5, .05, 'classes {}, batch size {}, embedding dim {}, {} distance, Proportion of labels trained on: {}.'.format(
-            #self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain), ha='center')
-        plt.scatter(test_epochs,top5)
-        plt.plot(test_epochs,top5,label='Top 5 Accuracy')
-        plt.scatter(test_epochs,top1,label='Top 1 Accuracy')
-        plt.legend(loc="lower right")
-        plt.plot(test_epochs,top1)
-        fig.set_size_inches(7, 7, forward=True)
-        plt.xlabel('epoch')
-        plt.ylabel('accuracy')
-        plt.savefig('./Results/topn{}_{}_{}_{}_{}_{}.png'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight))
-        plt.close()
 
 
-    def animate(self,test_every_n_epochs):
-
-        labelsnp = self.labels[self.is_relevant_mask]
-        for i,embedding in enumerate(tqdm.tqdm(self.all_embeddings)):
-            data = embedding.cpu().numpy()
-            fig = plt.figure(dpi=150)
-            fig.clf()
-            ax = fig.subplots()
-            #ax.set_xlim([-1,1])
-            #ax.set_ylim([-1,1])
-            plt.title('Epoch {}'.format(i*test_every_n_epochs))
-
-
-            plt.scatter(data[:,0],data[:,1])
-            for j,label in enumerate(labelsnp):
-                if label==-1:
-                    continue
-                ax.annotate(label,(data[j,0],data[j,1]))
-            #pos = draw(i)  # draw the prediction of the first epoch
-            plt.savefig('./ims/{n}.png'.format(n=i))
-            plt.close()
-
-        imagep = pathlib.Path('./ims/')
-        images = imagep.glob('*.png')
-        images = list(images)
-        images.sort(key=lambda x : int(str(x).split('/')[-1].split('.')[0]))
-        with imageio.get_writer('./Results/training_{}_{}_{}_{}_{}_{}.gif'.format(
-            self.nclasses,self.batch_size,self.embedding_dim,self.distance,self.ptrain,self.sup_weight), mode='I') as writer:
-            for image in images:
-                data = imageio.imread(image.__str__())
-                writer.append_data(data)
-
-
-
-
-if __name__=="__main__":
-
-    argparser = argparse.ArgumentParser("GraphSage training")
-    argparser.add_argument('--device', type=str, default='cuda',
-        help="Device to use for training")
-    argparser.add_argument('--num-epochs', type=int, default=400)
-    argparser.add_argument('--num-hidden', type=int, default=64)
-    argparser.add_argument('--num-layers', type=int, default=2)
-    argparser.add_argument('--fan-out', type=str, default='10,25')
-    argparser.add_argument('--agg-type', type=str, default='mean')
-    argparser.add_argument('--batch-size', type=int, default=1000)
-    argparser.add_argument('--test-every', type=int, default=25)
-    argparser.add_argument('--lr', type=float, default=1e-2)
-    argparser.add_argument('--sup-weight', type=float, default=1)
-    argparser.add_argument('--neg_samples', type=int, default=1)
-    argparser.add_argument('--dropout', type=float, default=0)
-    argparser.add_argument('--num-workers', type=int, default=0,
-        help="Number of sampling processes. Use 0 for no extra process.")
-    argparser.add_argument('--n-classes', type=int, default=10000)
-    argparser.add_argument('--p-train', type=float, default=1,
-        help="Proportion of labels known at training time")
-    argparser.add_argument('--max-test-labels', type=int, default=1000000,
-        help="Maximum number of labels to include in test set, helps with performance \
-since currently relying on all pairwise search for testing.")
-    argparser.add_argument('--distance-metric', type=str, default='cosine',
-        help="Distance metric to use in triplet loss function and nearest neighbors inference, mse or cosine.")
-    argparser.add_argument('--embedding-dim',type=int,default=32,help="Dimensionality of the final embedding")
-    argparser.add_argument('--save',action='store_true')
-    argparser.add_argument('--load',action='store_true')
-    args = argparser.parse_args()
-
-
-
-
-    print('loading data...')
-    rw_data = load_rw_data_streaming(args.n_classes,args.p_train,args.max_test_labels,args.save,args.load)
-    trainer = SimilarityEmbedder(rw_data,args)
-    trainer.train(args.num_epochs,args.test_every)
-
-
-
-    
-
-
-    #ani = animation.FuncAnimation(fig, draw, frames=len(all_logits), interval=200)
-    #ani.save('im.mp4', writer=writer)

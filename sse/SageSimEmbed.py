@@ -104,8 +104,8 @@ class SimilarityEmbedder:
 
         self.node_ids = pd.DataFrame(columns=['id','intID','classid','feature_flag'])
         self.G = DGLGraph()
-        self.G.readonly(True)
-        self.G = dgl.as_heterograph(self.G)
+        #self.G.readonly(True)
+        #self.G = dgl.as_heterograph(self.G)
 
 
     def add_data(self, edgelist, nodelist, nodeid, classid=None, feature_node_flag = None):
@@ -179,13 +179,13 @@ class SimilarityEmbedder:
         edgelist = edgelist.merge(nodes,left_on=nodeid2,right_on='id',how='left',suffixes=('','2'))
         edgelist = edgelist[['intID','intID2']]
 
-        self.G = dgl.as_immutable_graph(self.G)
-        self.G.readonly(False)
+        if self.G.is_readonly:
+            self.G = dgl.as_immutable_graph(self.G)
+            self.G.readonly(False)
         self.G.add_nodes(num_new_nodes)
         self.G.add_edges(edgelist.intID.tolist(),edgelist.intID2.tolist())
         self.G.add_edges(edgelist.intID2.tolist(),edgelist.intID.tolist())
-        self.G.readonly()
-        self.G = dgl.as_heterograph(self.G)
+        
 
         #reset internal flag that embeddings and index need to be recomputed
         self._embeddings = None 
@@ -227,6 +227,8 @@ class SimilarityEmbedder:
         print(f'Test mask {np.sum(self.test_mask)} {len(self.test_mask)}')
 
         self.embed = nn.Embedding(len(self.node_ids),self.feature_dim)
+        self.G.readonly()
+        self.G = dgl.as_heterograph(self.G)
         self.G.ndata['features'] = self.embed.weight
         self.features = self.embed.weight
         self.features.to(self.device)

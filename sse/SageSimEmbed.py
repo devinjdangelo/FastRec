@@ -92,7 +92,7 @@ class SimilarityEmbedder:
         else:
             raise ValueError('distance {} is not implemented'.format(self.distance))
 
-        hidden_dim = embedding_dim*2 if hidden_dim is None else hidden_dim
+        hidden_dim = embedding_dim*4 if hidden_dim is None else hidden_dim
         feature_dim = hidden_dim*2 if feature_dim is None else feature_dim
         self.feature_dim = feature_dim
         self.net = SAGE(feature_dim, hidden_dim, embedding_dim, hidden_layers, F.relu, dropout, agg_type)
@@ -102,47 +102,62 @@ class SimilarityEmbedder:
         self._index = None 
         self._masks_set = False
 
-        self.node_ids = pd.DataFrame(columns=['id','intID','classid'])
+        self.node_ids = pd.DataFrame(columns=['id','intID','classid','feature_flag'])
         self.G = DGLGraph()
         self.G.readonly(True)
         self.G = dgl.as_heterograph(self.G)
 
 
-    def add_data(self, edgelist, nodeid1, nodeid2, classid1=None, classid2=None):
-        """Updates graph data with a new edgelist. Maps each nodeid to an integer id. 
+    def add_data(self, edgelist, nodelist, nodeid, classid=None, feature_node_flag = None):
+        """Updates graph data with a new edgelist and nodelist. Maps each nodeid to an integer id. 
         input nodeids can be any unique identifier (strings, floats, integers ect...).
         They will internally be mapped to a sequential integer id which DGL uses. self.nodeids
         keeps track of the mappings between input identifiers and the sequential integer ids.
-        If you run out of memory when calling this method, split edglist into chunks and call
+        If you run out of memory when calling this method, split edglist and nodelist into chunks and call
         this method once for each chunk.
 
         Args
         ----
         edgelist : dataframe with edges between nodes, edges are assumed to be bidrectional and 
                     should only be in the dataframe once (e.g. a <-> b means do not include b <-> a)
-        nodeid1 : column name in edgelist which uniquely identifies node1
-        nodeid2 : columns name in edgelist which uniquely identifies node2
-        classid1 : optional column name in edgelist which assigns a class to node1
-        classid2 : optional column name in edgelist which assigns a class to node2
-        p_train : proportion of newly added nodes which have an assigned class to use in training set
-        p_test : proportion of newly added nodes which have an assigned class to use in testing set"""
+                    should only have two columns with each row representing a connection between two
+                    node ids.
+        nodelist : dataframe which maps nodeids to optional classids and feature_node_flags.
+                Each node in each edge in edgelist should correspond to a node in nodelist
+        nodeid : column name in nodelist which uniquely identifies each node. 
+        classid : optional column name in nodelist which assigns a class to each node. 
+                if only some nodes have a known class, then assign unknown class nodes to
+                None or np.nan. 
+        feature_node_flag : optional column name in nodelist which flags a given node to be
+                        used as a feature only. That is, it is included in the graph to enrich
+                        the embeddings of other nodes, but it is excluded from similarity search
+                        and the faiss index."""
 
-        if classid1 is not None or classid2 is not None:
-            assert classid1 is not None and classid2 is not None
-        else:
-            classid1 = 'classid1'
-            classid2 = 'classid2'
-            edgelist[classid1] = None 
-            edgelist[classid2] = None
+        if classid is None:
+            classid1 = 'classid'
+            nodelist[classid] = None 
 
-        edgelist = edgelist[[nodeid1,nodeid2,classid1,classid2]]
+        if feature_node_flag is None:
+            feature_node_flag = 'feature_node_flag'
+            nodelist[feature_node_flag] = False
+
+        try:
+            assert len(edgelist.columns) == 2
+        except AssertionError:
+            raise ValueError('edgelist must have exactly two columns, each row representing an edge between two nodes')
         
-        n1 = edgelist[[nodeid1,classid1]].drop_duplicates()
-        n1.columns = ['id', 'classid']
-        n2 = edgelist[[nodeid2,classid2]].drop_duplicates()
-        n2.columns = ['id', 'classid']
-
+        #validate that nodelist and edgelist are valid
+        n1 = edgelist.iloc[:,:1].drop_duplicates()
+        n1.columns = ['id']
+        n2 = edgelist.iloc[:,1:2].drop_duplicates()
+        n2.columns = ['id']
         nodes = pd.concat([n1,n2])
+        nodes = nodes.merge(nodelist,left_on='id',right_on=nodeid,how='left',suffixes=('','_merged'))
+        
+        try:
+            assert nodes[feature_node_flag].isna().sum() == 0
+        except AssertionError:
+            raise ValueError('Nodes in edgelist are not all identified in nodelist. Please add all nodes in edgelist to nodelist.')
 
         nodes = nodes.merge(self.node_ids,on='id',how='left',suffixes=('','_merged'))
         num_new_nodes = int(nodes.intID.isna().sum())
@@ -154,9 +169,12 @@ class SimilarityEmbedder:
         new_nodes = pd.isna(nodes.intID)
         nodes.loc[new_nodes,'intID'] = list(range(start,end))
         update_nodes = nodes[new_nodes]
-        update_nodes = update_nodes[['id','intID','classid']]
+        update_nodes = update_nodes[['id','intID', classid, feature_node_flag]]
+        update_nodes.columns = ['id', 'intID', 'classid', 'feature_flag']
         self.node_ids = pd.concat([self.node_ids,update_nodes])
+        print(len(self.node_ids),len(self.node_ids.columns))
 
+        nodeid1, nodeid2 = edgelist.columns
         edgelist = edgelist.merge(nodes,left_on=nodeid1,right_on='id',how='left')
         edgelist = edgelist.merge(nodes,left_on=nodeid2,right_on='id',how='left',suffixes=('','2'))
         edgelist = edgelist[['intID','intID2']]
@@ -184,7 +202,10 @@ class SimilarityEmbedder:
         self.labels = self.node_ids.classid.to_numpy()
 
         #is relevant mask indicates the nodes which we know the class of
-        self.is_relevant_mask = pd.isna(self.node_ids.classid).to_numpy()
+        self.is_relevant_mask = np.logical_not(pd.isna(self.node_ids.classid).to_numpy())
+
+        #entity_mask indicates the nodes which we want to include in the faiss index
+        self.entity_mask = np.logical_not(self.node_ids.feature_flag.to_numpy().astype(np.bool))
 
         self.train_mask =  np.random.choice(
         a=[False,True],size=(len(self.node_ids)),p=[1-self.p_train,self.p_train])
@@ -198,7 +219,12 @@ class SimilarityEmbedder:
 
         #do not include any node without a classid in either set
         self.train_mask = np.logical_and(self.train_mask,self.is_relevant_mask)
+        self.train_mask = np.logical_and(self.train_mask,self.entity_mask)
         self.test_mask = np.logical_and(self.test_mask,self.is_relevant_mask)
+        self.test_mask = np.logical_and(self.test_mask,self.entity_mask)
+
+        print(f'Train mask {np.sum(self.train_mask)} {len(self.train_mask)}')
+        print(f'Test mask {np.sum(self.test_mask)} {len(self.test_mask)}')
 
         self.embed = nn.Embedding(len(self.node_ids),self.feature_dim)
         self.G.ndata['features'] = self.embed.weight
@@ -237,21 +263,24 @@ class SimilarityEmbedder:
         -------
         a faiss index of input embeddings"""
 
+        if not self._masks_set:
+            self.set_masks()
+
         if self._index is None:
             if self.distance_metric=='cosine':
                 self._index  = faiss.IndexFlatIP(self.embedding_dim)
-                normalized_embeddings = np.copy(self.embeddings)
+                embeddings = np.copy(self.embeddings[self.entity_mask])
                 #this function operates in place so np.copy any views into a new array before using.
-                faiss.normalize_L2(normalized_embeddings)
-                embeddings = normalized_embeddings
+                faiss.normalize_L2(embeddings)
             elif self.distance_metric=='mse':
                 self._index = faiss.IndexFlatL2(self.embedding_dim)
-                embeddings = self.embeddings
+                embeddings = self.embeddings[self.entity_mask]
             if self.faiss_gpu:
                 GPU = faiss.StandardGpuResources()
                 self._index = faiss.index_cpu_to_gpu(GPU, 0, self._index)
 
             self._index.add(embeddings)
+
 
         return self._index
 
@@ -287,11 +316,15 @@ class SimilarityEmbedder:
         -------
         dictionary of neighbors for each querynode and corresponding distance"""
 
+        if not self._masks_set:
+            self.set_masks()
+
         intids = [self.node_ids.loc[self.node_ids.id == node].intID.iloc[0]
                     for node in nodelist]
         inputs = self.embeddings[intids,:]
         D, I = self._search_index(inputs,k)
-        I = [[self.node_ids.loc[self.node_ids.intID==neighbor].id.iloc[0] for neighbor in neighbors] for neighbors in I]
+        faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask]
+        I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
         output = {node:{'neighbors':i,'distances':d} for node, d, i in zip(nodelist,D,I)}
         return output
 
@@ -313,14 +346,15 @@ class SimilarityEmbedder:
 
         mask = self.test_mask if test_only else self.is_relevant_mask
         test_labels = self.labels[mask]
+        faiss_labels = self.labels[self.entity_mask]
 
-        test_embeddings = self.embeddings[self.test_mask]
+        test_embeddings = self.embeddings[mask]
         _, I = self._search_index(test_embeddings,6)
 
         ft1, ft5 = [], []
         for node, neighbors in enumerate(I):
             label = test_labels[node]
-            neighbor_labels = [self.labels[n] for n in neighbors[1:]]
+            neighbor_labels = [faiss_labels[n] for n in neighbors[1:]]
             ft1.append(label==neighbor_labels[0])
             ft5.append(label in neighbor_labels)
 
@@ -369,7 +403,7 @@ class SimilarityEmbedder:
         embeddings : pytorch tensor of embeddings to be trained
         labels : labels indicating which embeddings are equivalent"""
         
-        batch_relevant_nodes = [i for i,l in enumerate(labels) if pd.isna(l)]
+        batch_relevant_nodes = [i for i,l in enumerate(labels) if not pd.isna(l)]
         embeddings = embeddings[batch_relevant_nodes]
         labels = labels[batch_relevant_nodes]
         idx1,idx2,target = self.setup_pairwise_loss_tensors(labels)
@@ -425,7 +459,7 @@ class SimilarityEmbedder:
         unsupervised : whether to train completely unsupervised
         learning_rate : learning rate to use in the adam optimizer
         fanouts : number of neighbors to sample at each layer for GraphSage
-        neg_samles : number of negative samples to use in unsupervised loss"""
+        neg_samples : number of negative samples to use in unsupervised loss"""
 
         if not self._masks_set:
             self.set_masks()
@@ -434,10 +468,11 @@ class SimilarityEmbedder:
 
         if not unsupervised:
             sampler = NeighborSampler(self.G, [int(fanout) for fanout in fanouts])
-            data = list(range(len(self.node_ids)))
+            data = np.nonzero(self.train_mask)[0]
+            print(f'length of data {len(data)}')
         else:
             sampler = UnsupervisedNeighborSampler(self.G, [int(fanout) for fanout in fanouts],neg_samples)
-            data = np.nonzero(self.train_mask)[0]
+            data = list(range(len(self.node_ids)))
             unsup_loss_fn = CrossEntropyLoss()
             unsup_loss_fn.to(self.device)
 

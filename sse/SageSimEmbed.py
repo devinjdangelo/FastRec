@@ -223,9 +223,6 @@ class SimilarityEmbedder:
         self.test_mask = np.logical_and(self.test_mask,self.is_relevant_mask)
         self.test_mask = np.logical_and(self.test_mask,self.entity_mask)
 
-        print(f'Train mask {np.sum(self.train_mask)} {len(self.train_mask)}')
-        print(f'Test mask {np.sum(self.test_mask)} {len(self.test_mask)}')
-
         self.embed = nn.Embedding(len(self.node_ids),self.feature_dim)
         self.G.readonly()
         self.G = dgl.as_heterograph(self.G)
@@ -438,7 +435,7 @@ class SimilarityEmbedder:
             loss = loss_pos + loss_neg
 
         else:
-            raise ValueError('distance {} is not implemented'.format(self.distance))
+            raise ValueError('distance {} is not implemented'.format(self.distance_metric))
 
         return loss 
        
@@ -471,7 +468,6 @@ class SimilarityEmbedder:
         if not unsupervised:
             sampler = NeighborSampler(self.G, [int(fanout) for fanout in fanouts])
             data = np.nonzero(self.train_mask)[0]
-            print(f'length of data {len(data)}')
         else:
             sampler = UnsupervisedNeighborSampler(self.G, [int(fanout) for fanout in fanouts],neg_samples)
             data = list(range(len(self.node_ids)))
@@ -484,7 +480,7 @@ class SimilarityEmbedder:
                             collate_fn=sampler.sample_blocks,
                             shuffle=True,
                             drop_last=True,
-                            num_workers=1)
+                            num_workers=0)
 
         
 

@@ -15,6 +15,8 @@ import argparse
 import itertools as it
 import tqdm
 import imageio
+import os
+
 import pickle
 
 import dgl
@@ -28,6 +30,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import faiss
+import uvicorn
+
 
 from .torchmodels import *
 
@@ -105,6 +109,19 @@ class SimilarityEmbedder:
         #self.G.readonly(True)
         #self.G = dgl.as_heterograph(self.G)
 
+        #hold init args in memory in case needed to save to disk for restoring later
+        self.initargs = (embedding_dim,
+                        feature_dim,
+                        hidden_dim,
+                        hidden_layers,
+                        dropout,
+                        agg_type,
+                        distance,
+                        torch_device,
+                        faiss_gpu,
+                        inference_batch_size,
+                        p_train)
+
 
     def add_data(self, edgelist, nodelist, nodeid, classid=None, feature_node_flag = None):
         """Updates graph data with a new edgelist and nodelist. Maps each nodeid to an integer id. 
@@ -170,7 +187,6 @@ class SimilarityEmbedder:
         update_nodes = update_nodes[['id','intID', classid, feature_node_flag]]
         update_nodes.columns = ['id', 'intID', 'classid', 'feature_flag']
         self.node_ids = pd.concat([self.node_ids,update_nodes])
-        print(len(self.node_ids),len(self.node_ids.columns))
 
         nodeid1, nodeid2 = edgelist.columns
         edgelist = edgelist.merge(nodes,left_on=nodeid1,right_on='id',how='left')
@@ -221,10 +237,12 @@ class SimilarityEmbedder:
         self.test_mask = np.logical_and(self.test_mask,self.is_relevant_mask)
         self.test_mask = np.logical_and(self.test_mask,self.entity_mask)
 
-        self.embed = nn.Embedding(len(self.node_ids),self.feature_dim)
-        self.G.readonly()
-        self.G = dgl.as_heterograph(self.G)
-        self.G.ndata['features'] = self.embed.weight
+        if not self.G.is_readonly:
+            self.embed = nn.Embedding(len(self.node_ids),self.feature_dim)
+            self.G.readonly()
+            self.G = dgl.as_heterograph(self.G)
+            self.G.ndata['features'] = self.embed.weight
+
         self.features = self.embed.weight
         self.features.to(self.device)
         self.embed.to(self.device)
@@ -322,7 +340,7 @@ class SimilarityEmbedder:
         D, I = self._search_index(inputs,k)
         faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask]
         I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
-        output = {node:{'neighbors':i,'distances':d} for node, d, i in zip(nodelist,D,I)}
+        output = {node:{'neighbors':i,'distances':d.tolist()} for node, d, i in zip(nodelist,D,I)}
         return output
 
     def evaluate(self, test_only=False):
@@ -564,21 +582,88 @@ class SimilarityEmbedder:
         else:
             return loss_history,top5_history,top1_history
 
+    def start_api(self):
+        """Launches a fastapi to query this class in its current state."""
+        package_path = os.path.dirname(os.path.abspath(__file__))
+        production_path = package_path + '/production_model'
+        self.save(production_path)
+        #this import cant be at the top level to prevent circular depedency
+        from .SageAPI import app
+        uvicorn.run(app)
+
 
     def save(self, filepath):
-        """Save embeddings, model weights, and graph data to disk so it can be restored later
+        """Save all information neccessary to recover current state of the current instance of
+        this object to a folder. Initialization args, graph data, node ids, current trained embedding,
+        and current torch paramters are all saved.
 
         Args
         ----
         filepath : str path on disk to save files"""
-        pass 
+        # dgl does not seem to have built in serialization to disk methods...
+        # but it can convert between networkx which does... workaround for now 
+        # is to translate to networkx then to disk and back in two steps
+        #nxg = self.G.to_networkx() 
+        #nx.write_gpickle(nxg,f'{filepath}/nxg.gpickle')
 
-    def load(self, filepath):
-        """restore embeddings, model weights and graph data from disk.
+        with open(f'{filepath}/dgl.pkl','wb') as pklf:
+            pickle.dump(self.G,pklf)
+
+        self.node_ids.to_csv(f'{filepath}/node_ids.csv')
+
+        with open(f'{filepath}/embed.pkl','wb') as pklf:
+            pickle.dump(self.embed,pklf)
+
+        th.save(self.net.state_dict(),f'{filepath}/model_weights.torch')
+
+        with open(f'{filepath}/initargs.pkl','wb') as pklf:
+            pickle.dump(self.initargs,pklf)
+
+
+    @classmethod
+    def load(cls, filepath):
+        """Restore a previous instance of this class from disk.
 
         Args
         ----
         filepath : str path on disk to load from"""
+
+        with open(f'{filepath}/initargs.pkl','rb') as pklf:
+            (embedding_dim,
+            feature_dim,
+            hidden_dim,
+            hidden_layers,
+            dropout,
+            agg_type,
+            distance,
+            torch_device,
+            faiss_gpu,
+            inference_batch_size,
+            p_train) = pickle.load(pklf)
+
+        restored_self = cls(embedding_dim,
+                            feature_dim,
+                            hidden_dim,
+                            hidden_layers,
+                            dropout,
+                            agg_type,
+                            distance,
+                            torch_device,
+                            faiss_gpu,
+                            inference_batch_size,
+                            p_train)
+
+        with open(f'{filepath}/dgl.pkl','rb') as pklf:
+            restored_self.G = pickle.load(pklf)
+
+        restored_self.node_ids = pd.read_csv(f'{filepath}/node_ids.csv')
+
+        with open(f'{filepath}/embed.pkl','rb') as pklf:
+            restored_self.embed = pickle.load(pklf)
+
+        restored_self.net.load_state_dict(th.load(f'{filepath}/model_weights.torch'))
+
+        return restored_self
 
 
 

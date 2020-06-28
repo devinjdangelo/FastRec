@@ -13,8 +13,6 @@ import pathlib
 from math import ceil
 import argparse
 import itertools as it
-import matplotlib.animation as animation
-import matplotlib.pyplot as plt
 import tqdm
 import imageio
 import pickle
@@ -407,6 +405,7 @@ class SimilarityEmbedder:
         labels = labels[batch_relevant_nodes]
         idx1,idx2,target = self.setup_pairwise_loss_tensors(labels)
 
+
         losstarget = th.tensor(target).to(self.device)
 
         if self.distance_metric=='cosine':
@@ -446,7 +445,8 @@ class SimilarityEmbedder:
                     unsupervised = False,
                     learning_rate = 1e-2,
                     fanouts = [10,25],
-                    neg_samples = 1):
+                    neg_samples = 1,
+                    return_intermediate_embeddings = False):
         """Trains the network weights to improve the embeddings. Can train via supervised learning with triplet loss,
         semisupervised learning with triplet loss, or fully unsupervised learning.
 
@@ -467,15 +467,15 @@ class SimilarityEmbedder:
 
         if not unsupervised:
             sampler = NeighborSampler(self.G, [int(fanout) for fanout in fanouts])
-            data = np.nonzero(self.train_mask)[0]
+            sampledata = np.nonzero(self.train_mask)[0]
         else:
             sampler = UnsupervisedNeighborSampler(self.G, [int(fanout) for fanout in fanouts],neg_samples)
-            data = list(range(len(self.node_ids)))
+            sampledata = list(range(len(self.node_ids)))
             unsup_loss_fn = CrossEntropyLoss()
             unsup_loss_fn.to(self.device)
 
         dataloader = DataLoader(
-                            dataset=data,
+                            dataset=sampledata,
                             batch_size=batch_size,
                             collate_fn=sampler.sample_blocks,
                             shuffle=True,
@@ -493,6 +493,9 @@ class SimilarityEmbedder:
         loss_history = []
         top5_history = [testtop5]
         top1_history = [testtop1]
+        if return_intermediate_embeddings:
+            all_embeddings = []
+            all_embeddings.append(self.embeddings)
 
         for epoch in range(1,epochs+1):
             
@@ -513,10 +516,16 @@ class SimilarityEmbedder:
                     sup_input_nodes = sup_blocks[0].srcdata[dgl.NID]
                     sup_seeds = sup_blocks[-1].dstdata[dgl.NID]
 
-                    sup_batch_inputs = self.G.ndata['features'][sup_input_nodes].to(self.device)
+                    #sup_batch_inputs = self.G.ndata['features'][sup_input_nodes].to(self.device)
+                    sup_batch_inputs = self.features[sup_input_nodes].to(self.device)
                     sup_batch_labels = self.labels[sup_seeds]
+                    #nodeids = [self.node_ids.loc[self.node_ids.intID==i].id.iloc[0] for i in sup_seeds]
+
+                    #print(sup_batch_labels,nodeids)
 
                     sup_embeddings = self.net(sup_blocks, sup_batch_inputs)
+
+
 
                     loss = self.triplet_loss(sup_embeddings,sup_batch_labels)
                 else:
@@ -534,10 +543,13 @@ class SimilarityEmbedder:
                 optimizer.step()
                 #once the parameters change we no longer know the new embeddings for all nodes
                 self._embeddings = None 
+                self._index = None
+                
 
                 print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f} | Mem+Maxmem {:.3f} / {:.3f}".format(
                         epoch, step, loss.item(), th.cuda.memory_allocated()/(1024**3),th.cuda.max_memory_allocated()/(1024**3)))
-            
+            if return_intermediate_embeddings:
+                all_embeddings.append(self.embeddings)
             loss_history.append(loss.item())
             if epoch % test_every_n_epochs == 0 or epoch==epochs:
                 testtop5,testtop1 = self.evaluate(test_only=True)
@@ -545,7 +557,13 @@ class SimilarityEmbedder:
                 top1_history.append(testtop1)
 
                 print("Epoch {:05d} | Loss {:.8f} | Test Top5 {:.4f} | Test Top1 {:.4f}".format(
-                        epoch, loss.item(),testtop5,testtop1))                
+                        epoch, loss.item(),testtop5,testtop1)) 
+
+        if return_intermediate_embeddings:
+            return loss_history,top5_history,top1_history,all_embeddings     
+        else:
+            return loss_history,top5_history,top1_history
+
 
     def save(self, filepath):
         """Save embeddings, model weights, and graph data to disk so it can be restored later

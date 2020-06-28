@@ -117,7 +117,6 @@ def baseline_acc(G,labels,is_relevant_node):
             break
 
     pbar.close()
-    print(np.mean(top5),np.mean(top1))
     return np.mean(top5), np.mean(top1)
 
 

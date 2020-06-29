@@ -35,6 +35,17 @@ import uvicorn
 from torchmodels import *
   
 class SimilarityEmbedder:
+    """Rapidly trains similarity embeddings for graphs and generates recomendations
+
+    Attributes
+    ----------
+    G : DGL Graph object
+        Current DGL graph for all added data with self.add_data
+    node_ids : pandas data frame
+        Contains mapping from user provided nodeids to DGL and faiss compatable integer ids.
+        Also contains various flags which identify properties and classes of the nodes.
+    """
+
     def __init__(self, embedding_dim,
                         feature_dim = None,
                         hidden_dim = None,
@@ -56,28 +67,39 @@ class SimilarityEmbedder:
 
         Args
         ----
-        embedding_dim : the dimension of the final output embedding used for similarity search
-        feature_dim : the dimension of the input node features, currently only allowed to be 
-                        a trainable embedding. In the future should allow external node features.
-                        defaults to 2*hidden_dim
-        hidden_dim : the dimension of the intermediate hidden layers, defaults to 2*embedding dim.
-        hidden_layers : number of hidden layers. Embeddings can collpase to a single value if this 
-                        is set too high. Defaults to 2.
-        dropout : whether to apply a dropout layer after hidden layers of GraphSAge. Defaults to 0,
-                    which means there is no Dropout applied.
-        agg_type : aggregation function to apply to GraphSage. Valid options are 'mean', 'lstm', and 'gcn'
-                   aggregation. See GraphSage paper for implementation details. Defaults to gcn which performs
-                   well for untrained networks.
-        distance : distance metric to use for similarity search. Valid options are mse and cosine. Defaults to cosine.
-        torch_device : computation device to place pytorch tensors on. Valid options are any valid pytorch device. Defaults 
-                to cpu.
-        faiss_gpu : whether to use gpu to accelerate faiss searching. Note that it will compete with pytorch for gpu memory.
-        inference_batch_size : number of nodes to compute per batch when computing all embeddings with self.net.inference.
-                                defaults to 10000 which should comfortably fit on most gpus and be reasonably efficient on cpu.
-        p_train : the proportion of nodes with known class labels to use for training defaults to 1 
-        train_faiss_index : whether to train faiss index for faster searches. Not reccomended for training since brute force
-                            will actually be faster than retraining the index at each iteration. Should be used for api to speed
-                            up response times.
+        embedding_dim : int
+            the dimension of the final output embedding used for similarity search
+        feature_dim : int
+            the dimension of the input node features, currently only allowed to be 
+            a trainable embedding. In the future should allow external node features.
+            defaults to 2*hidden_dim
+        hidden_dim : int
+            the dimension of the intermediate hidden layers, defaults to 2*embedding dim.
+        hidden_layers : int
+            number of hidden layers. Embeddings can collpase to a single value if this 
+            is set too high. Defaults to 2.
+        dropout : float
+            whether to apply a dropout layer after hidden layers of GraphSAge. Defaults to 0,
+            which means there is no Dropout applied.
+        agg_type : str
+            aggregation function to apply to GraphSage. Valid options are 'mean', 'lstm', and 'gcn'
+            aggregation. See GraphSage paper for implementation details. Defaults to gcn which performs
+            well for untrained networks.
+        distance : str
+            distance metric to use for similarity search. Valid options are l2 and cosine. Defaults to cosine.
+        torch_device : str
+            computation device to place pytorch tensors on. Valid options are any valid pytorch device. Defaults 
+            to cpu.
+        faiss_gpu : bool
+            whether to use gpu to accelerate faiss searching. Note that it will compete with pytorch for gpu memory.
+            inference_batch_size : number of nodes to compute per batch when computing all embeddings with self.net.inference.
+            defaults to 10000 which should comfortably fit on most gpus and be reasonably efficient on cpu.
+        p_train : float
+            the proportion of nodes with known class labels to use for training defaults to 1 
+        train_faiss_index : bool
+            whether to train faiss index for faster searches. Not reccomended for training since brute force
+            will actually be faster than retraining the index at each test iteration. Can be used for api to speed
+            up response times.
         """
         self.embedding_dim = embedding_dim
         self.device = torch_device 
@@ -92,7 +114,7 @@ class SimilarityEmbedder:
             self.distance_function = lambda t1,t2 : F.cosine_embedding_loss(t1,
                                                 t2,
                                                 th.ones(t1.shape[0]).to(self.device),reduce=False)
-        elif self.distance_metric == 'mse':
+        elif self.distance_metric == 'l2':
             self.distance_function = lambda t1,t2 : th.sum(F.mse_loss(t1,t2,reduce=False),dim=1)
         else:
             raise ValueError('distance {} is not implemented'.format(self.distance))
@@ -109,8 +131,6 @@ class SimilarityEmbedder:
 
         self.node_ids = pd.DataFrame(columns=['id','intID','classid','feature_flag'])
         self.G = DGLGraph()
-        #self.G.readonly(True)
-        #self.G = dgl.as_heterograph(self.G)
 
         #hold init args in memory in case needed to save to disk for restoring later
         self.initargs = (embedding_dim,
@@ -137,20 +157,25 @@ class SimilarityEmbedder:
 
         Args
         ----
-        edgelist : dataframe with edges between nodes, edges are assumed to be bidrectional and 
-                    should only be in the dataframe once (e.g. a <-> b means do not include b <-> a)
-                    should only have two columns with each row representing a connection between two
-                    node ids.
-        nodelist : dataframe which maps nodeids to optional classids and feature_node_flags.
-                Each node in each edge in edgelist should correspond to a node in nodelist
-        nodeid : column name in nodelist which uniquely identifies each node. 
-        classid : optional column name in nodelist which assigns a class to each node. 
-                if only some nodes have a known class, then assign unknown class nodes to
-                None or np.nan. 
-        feature_node_flag : optional column name in nodelist which flags a given node to be
-                        used as a feature only. That is, it is included in the graph to enrich
-                        the embeddings of other nodes, but it is excluded from similarity search
-                        and the faiss index."""
+        edgelist : pandas data frame
+            dataframe with edges between nodes, edges are assumed to be bidrectional and 
+            should only be in the dataframe once (e.g. a <-> b means do not include b <-> a)
+            should only have two columns with each row representing a connection between two
+            node ids.
+        nodelist : pandas data frame
+            dataframe which maps nodeids to optional classids and feature_node_flags.
+            Each node in each edge in edgelist should correspond to a node in nodelist
+        nodeid : str
+            column name in nodelist which uniquely identifies each node. 
+        classid : str
+            optional column name in nodelist which assigns a class to each node. 
+            if only some nodes have a known class, then assign unknown class nodes to
+            None or np.nan. 
+        feature_node_flag : str
+            optional column name in nodelist which flags a given node to be
+            used as a feature only. That is, it is included in the graph to enrich
+            the embeddings of other nodes, but it is excluded from similarity search
+            and the faiss index."""
 
         if classid is None:
             classid1 = 'classid'
@@ -279,14 +304,9 @@ class SimilarityEmbedder:
         """Creates a faiss index for similarity searches over the node embeddings.
         Simple implementation of a cached property.
 
-        Args
-        ----
-        embeddings : the embeddings to add to faiss index
-        use_gpu : whethern to store the index on gpu and use gpu for compute
-
         Returns
         -------
-        a faiss index of input embeddings"""
+        a faiss index with input embeddings added and optionally trained"""
 
         if not self._masks_set:
             self.set_masks()
@@ -297,7 +317,7 @@ class SimilarityEmbedder:
                 embeddings = np.copy(self.embeddings[self.entity_mask])
                 #this function operates in place so np.copy any views into a new array before using.
                 faiss.normalize_L2(embeddings)
-            elif self.distance_metric=='mse':
+            elif self.distance_metric=='l2':
                 self._index = faiss.IndexFlatL2(self.embedding_dim)
                 embeddings = self.embeddings[self.entity_mask]
             
@@ -321,13 +341,15 @@ class SimilarityEmbedder:
 
         Args
         ----
-        inputs : the vectors to search against the faiss index
-        k : how many neighbors to lookup
-        label_nodes : lookup labels of nodes or just return integer ids
+        inputs : numpy array np.float
+            the vectors to search against the faiss index
+        k : int
+            how many neighbors to lookup
 
         Returns
         -------
         D, I distance numpy array and neighbors array from faiss"""
+
         if self.distance_metric == 'cosine':
             inputs = np.copy(inputs)
             faiss.normalize_L2(inputs)
@@ -340,8 +362,10 @@ class SimilarityEmbedder:
 
         Args
         ----
-        nodelist : list of node identifiers to query
-        k : number of neighbors to return
+        nodelist : list of any types castable to stirng
+            list of node identifiers to query
+        k : int
+            number of neighbors to return
 
         Returns
         -------
@@ -364,12 +388,14 @@ class SimilarityEmbedder:
 
         Args
         ----
-        test_only : whether to only test the performance on the test set. If 
-                    false, all nodes with known class will be tested.
+        test_only : bool
+            whether to only test the performance on the test set. If 
+            false, all nodes with known class will be tested.
 
         Returns
         -------
-        P at least 1 correct neighbors are in top5, and top1 respectively"""
+        Share of nodes where at least 1 neighbor in top5 and top1 are of the same class respectively"""
+
         self.net.eval()
 
         if not self._masks_set:
@@ -399,7 +425,8 @@ class SimilarityEmbedder:
 
         Args
         ----
-        labelsnp : numpy array of labels
+        labelsnp : numpy array 
+            Class labels of each node, labelsnp[i] = class of node with intid i
 
         Returns
         -------
@@ -431,8 +458,10 @@ class SimilarityEmbedder:
 
         Args
         ----
-        embeddings : pytorch tensor of embeddings to be trained
-        labels : labels indicating which embeddings are equivalent"""
+        embeddings : pytorch tensor torch.float32
+            embeddings to be trained
+        labels : numpy array
+            Class labels of each node, labelsnp[i] = class of node with intid i"""
         
         batch_relevant_nodes = [i for i,l in enumerate(labels) if not pd.isna(l)]
         embeddings = embeddings[batch_relevant_nodes]
@@ -449,7 +478,7 @@ class SimilarityEmbedder:
                                             input2,
                                             losstarget,
                                             margin=0.5)
-        elif self.distance_metric=='mse':
+        elif self.distance_metric=='l2':
             idx1_pos = [idx for i,idx in enumerate(idx1) if target[i]==1]
             idx1_neg = [idx for i,idx in enumerate(idx1) if target[i]==-1]
 
@@ -486,13 +515,20 @@ class SimilarityEmbedder:
 
         Args
         ----
-        epochs : number of training passes over the data
-        batch_size : number of seed nodes for building the training graph
-        test_every_n_epochs : how often to do a full evaluation of the embeddings, expensive for large graphs
-        unsupervised : whether to train completely unsupervised
-        learning_rate : learning rate to use in the adam optimizer
-        fanouts : number of neighbors to sample at each layer for GraphSage
-        neg_samples : number of negative samples to use in unsupervised loss"""
+        epochs : int
+            number of training passes over the data
+        batch_size : int
+            number of seed nodes for building the training graph
+        test_every_n_epochs : int
+            how often to do a full evaluation of the embeddings, expensive for large graphs
+        unsupervised : bool
+            whether to train completely unsupervised
+        learning_rate : float
+            learning rate to use in the adam optimizer
+        fanouts : list of int
+            number of neighbors to sample at each layer for GraphSage
+        neg_samples : int
+            number of negative samples to use in unsupervised loss"""
 
         if not self._masks_set:
             self.set_masks()
@@ -615,7 +651,8 @@ class SimilarityEmbedder:
 
         Args
         ----
-        filepath : str path on disk to save files"""
+        filepath : str 
+            path on disk to save files"""
 
         with open(f'{filepath}/dgl.pkl','wb') as pklf:
             pickle.dump(self.G,pklf)
@@ -637,7 +674,8 @@ class SimilarityEmbedder:
 
         Args
         ----
-        filepath : str path on disk to load from"""
+        filepath : str 
+            path on disk to load from"""
 
         with open(f'{filepath}/initargs.pkl','rb') as pklf:
             (embedding_dim,

@@ -31,7 +31,7 @@ untrained_embeddings =  sage.embeddings
 ```
 How do the embeddings look? Even with no training of the graph neural network weights, the embeddings don't do a terrible job  dividing the two communities. 
 
-![untrained_example_supervised](https://github.com/devinjdangelo/GraphSimEmbed)
+![untrained_example_supervised](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_supervised.png)
 
 With one command, we can improve the embeddings with supervised learning with a triplet loss. 
 

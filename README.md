@@ -44,6 +44,11 @@ sage.train(epochs, batch_size)
 
 The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner. 
 
+```python
+epochs, batch_size = 150, 15
+sage.train(epochs, batch_size,unsupervised=True)
+```
+
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/unsupervised.gif" alt="drawing" width="600"/>
 
 In this case, the unsupervised training actually seems to do a slightly better job of dividing the two communities.

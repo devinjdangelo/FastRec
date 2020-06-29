@@ -31,7 +31,7 @@ untrained_embeddings =  sage.embeddings
 ```
 How do the embeddings look? Even with no training of the graph neural network weights, the embeddings don't do a terrible job  dividing the two communities. 
 
-![untrained_example_supervised](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_supervised.png|width=200px|height=200px)
+![untrained_example_supervised](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_supervised.png)
 
 With one command, we can improve the embeddings with supervised learning with a triplet loss. 
 
@@ -39,8 +39,8 @@ With one command, we can improve the embeddings with supervised learning with a 
 epochs, batch_size = 150, 15
 sage.train(epochs, batch_size)
 ```
-![supervisedgif](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif|width=200px|height=200px)
-![150epochs_supervised_trained](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/150epochs_supervised_trained.png|width=200px|height=200px)
+![supervisedgif](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif)
+![150epochs_supervised_trained](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/150epochs_supervised_trained.png)
 
 The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner. 
 

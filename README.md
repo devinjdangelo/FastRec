@@ -44,7 +44,7 @@ sage.train(epochs, batch_size)
 ```
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif" alt="drawing" width="600"/>
 
-The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner. 
+The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner.
 
 ```python
 epochs, batch_size = 150, 15
@@ -64,7 +64,9 @@ untrained_embeddings_large =  sage.embeddings
 
 <img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_large.png" alt="drawing" width="600"/>
 
-This looks nearly as good as the trained version of the small network, but no training was required! Once we have embeddings that we are happy with, we can query a specific node or nodes to get its nearest neighbors in a single line.
+This looks nearly as good as the trained version of the small network, but no training was required! 
+
+Once we have embeddings that we are happy with, we can query a specific node or nodes to get its nearest neighbors in a single line.
 
 ```python
 #what are the 5 nearest neighbors of node 0, the Admin, and 33, the Instructor?

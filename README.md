@@ -54,13 +54,13 @@ Then simply send a request using the id of the node set by geosim.py.
 ```python
 import requests
 #configure url, default is localhost
-api = 'http://127.0.0.1:8000/{}/{}/{}'
+apiurl = 'http://127.0.0.1:8000/{}/{}/{}'
 #this is samplenumber_hash and is found in the simulated data csv files
 example_node = '0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577'
 #how many neighbors to find
 k = 5
 r = requests.get(apiurl.format('knn',nodeid,k))
-r
+r.json()
 {'Nearest Neighbors': ['0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
                        '1_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
                        '2_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',
@@ -75,7 +75,7 @@ r
 
 #we can also query neighbors based on number of mutual neighbors as a baseline
 r = requests.get(apiurl.format('knn_jacard',nodeid,k))
-r
+r.json()
 {...
  'N Shared Locations': [38, 30, 21, 21, 20],
  'Nearest Neighbors': ['0_8424d2fa9b82652458a7da8483afc6fa5a3963010cc543bfa3ed3f7e1f0ed577',

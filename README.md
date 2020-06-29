@@ -39,7 +39,7 @@ With one command, we can improve the embeddings with supervised learning with a 
 epochs, batch_size = 150, 15
 sage.train(epochs, batch_size)
 ```
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif" alt="drawing" width="150"/>
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif" alt="drawing" width="500"/>
 
 The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner. 
 

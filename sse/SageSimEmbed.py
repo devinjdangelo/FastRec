@@ -32,9 +32,7 @@ from torch.utils.data import DataLoader
 import faiss
 import uvicorn
 
-
-from .torchmodels import *
-
+from torchmodels import *
   
 class SimilarityEmbedder:
     def __init__(self, embedding_dim,
@@ -47,7 +45,8 @@ class SimilarityEmbedder:
                         torch_device = 'cpu',
                         faiss_gpu = False,
                         inference_batch_size = 10000,
-                        p_train = 1):
+                        p_train = 1,
+                        train_faiss_index = False):
         """Generates embeddings for graph data such that embeddings close by a given distance metric are
         'similar'. Embeddings can be used to predict which nodes belong to the same class. The embeddings can be
         trained with triplet loss in a fully supervised, semi-supervised or fully unsupervised manner. GraphSage
@@ -76,6 +75,9 @@ class SimilarityEmbedder:
         inference_batch_size : number of nodes to compute per batch when computing all embeddings with self.net.inference.
                                 defaults to 10000 which should comfortably fit on most gpus and be reasonably efficient on cpu.
         p_train : the proportion of nodes with known class labels to use for training defaults to 1 
+        train_faiss_index : whether to train faiss index for faster searches. Not reccomended for training since brute force
+                            will actually be faster than retraining the index at each iteration. Should be used for api to speed
+                            up response times.
         """
         self.embedding_dim = embedding_dim
         self.device = torch_device 
@@ -83,6 +85,7 @@ class SimilarityEmbedder:
         assert p_train<=1 and p_train>=0
         self.p_train = p_train
         self.faiss_gpu = faiss_gpu
+        self.train_faiss = train_faiss_index
 
         self.distance_metric = distance
         if self.distance_metric == 'cosine':
@@ -120,7 +123,8 @@ class SimilarityEmbedder:
                         torch_device,
                         faiss_gpu,
                         inference_batch_size,
-                        p_train)
+                        p_train,
+                        train_faiss_index)
 
 
     def add_data(self, edgelist, nodelist, nodeid, classid=None, feature_node_flag = None):
@@ -161,12 +165,18 @@ class SimilarityEmbedder:
         except AssertionError:
             raise ValueError('edgelist must have exactly two columns, each row representing an edge between two nodes')
         
+        #we must cast to str for the api to work
+        edgelist.iloc[:,0] = edgelist.iloc[:,0].astype(str)
+        edgelist.iloc[:,1] = edgelist.iloc[:,1].astype(str)
+        nodelist[nodeid] = nodelist[nodeid].astype(str)
+
         #validate that nodelist and edgelist are valid
         n1 = edgelist.iloc[:,:1].drop_duplicates()
         n1.columns = ['id']
         n2 = edgelist.iloc[:,1:2].drop_duplicates()
         n2.columns = ['id']
         nodes = pd.concat([n1,n2])
+        nodes = nodes.drop_duplicates()
         nodes = nodes.merge(nodelist,left_on='id',right_on=nodeid,how='left',suffixes=('','_merged'))
         
         try:
@@ -290,11 +300,17 @@ class SimilarityEmbedder:
             elif self.distance_metric=='mse':
                 self._index = faiss.IndexFlatL2(self.embedding_dim)
                 embeddings = self.embeddings[self.entity_mask]
+            
+            if self.train_faiss:
+                training_points = min(len(self.node_ids)//10,10000)
+                self._index = faiss.IndexIVFFlat(self._index, self.embedding_dim, training_points)
+                self._index.train(embeddings)
+
+            self._index.add(embeddings)
+
             if self.faiss_gpu:
                 GPU = faiss.StandardGpuResources()
                 self._index = faiss.index_cpu_to_gpu(GPU, 0, self._index)
-
-            self._index.add(embeddings)
 
 
         return self._index
@@ -334,7 +350,7 @@ class SimilarityEmbedder:
         if not self._masks_set:
             self.set_masks()
 
-        intids = [self.node_ids.loc[self.node_ids.id == node].intID.iloc[0]
+        intids = [self.node_ids.loc[self.node_ids.id == str(node)].intID.iloc[0]
                     for node in nodelist]
         inputs = self.embeddings[intids,:]
         D, I = self._search_index(inputs,k)
@@ -582,14 +598,14 @@ class SimilarityEmbedder:
         else:
             return loss_history,top5_history,top1_history
 
-    def start_api(self):
+    def start_api(self,*args,**kwargs):
         """Launches a fastapi to query this class in its current state."""
         package_path = os.path.dirname(os.path.abspath(__file__))
         production_path = package_path + '/production_model'
         self.save(production_path)
         #this import cant be at the top level to prevent circular depedency
         from .SageAPI import app
-        uvicorn.run(app)
+        uvicorn.run(app,*args,**kwargs)
 
 
     def save(self, filepath):
@@ -600,16 +616,11 @@ class SimilarityEmbedder:
         Args
         ----
         filepath : str path on disk to save files"""
-        # dgl does not seem to have built in serialization to disk methods...
-        # but it can convert between networkx which does... workaround for now 
-        # is to translate to networkx then to disk and back in two steps
-        #nxg = self.G.to_networkx() 
-        #nx.write_gpickle(nxg,f'{filepath}/nxg.gpickle')
 
         with open(f'{filepath}/dgl.pkl','wb') as pklf:
             pickle.dump(self.G,pklf)
 
-        self.node_ids.to_csv(f'{filepath}/node_ids.csv')
+        self.node_ids.to_csv(f'{filepath}/node_ids.csv',index=False)
 
         with open(f'{filepath}/embed.pkl','wb') as pklf:
             pickle.dump(self.embed,pklf)
@@ -639,7 +650,8 @@ class SimilarityEmbedder:
             torch_device,
             faiss_gpu,
             inference_batch_size,
-            p_train) = pickle.load(pklf)
+            p_train,
+            train_faiss_index) = pickle.load(pklf)
 
         restored_self = cls(embedding_dim,
                             feature_dim,
@@ -651,12 +663,14 @@ class SimilarityEmbedder:
                             torch_device,
                             faiss_gpu,
                             inference_batch_size,
-                            p_train)
+                            p_train,
+                            train_faiss_index)
 
         with open(f'{filepath}/dgl.pkl','rb') as pklf:
             restored_self.G = pickle.load(pklf)
 
         restored_self.node_ids = pd.read_csv(f'{filepath}/node_ids.csv')
+        restored_self.node_ids.id = restored_self.node_ids.id.astype(str) 
 
         with open(f'{filepath}/embed.pkl','rb') as pklf:
             restored_self.embed = pickle.load(pklf)

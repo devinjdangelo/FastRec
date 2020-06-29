@@ -3,7 +3,7 @@ import os
 import numpy as np
 from fastapi import FastAPI
 
-from .SageSimEmbed import SimilarityEmbedder
+from SageSimEmbed import SimilarityEmbedder
 
 app = FastAPI()
 
@@ -14,6 +14,10 @@ def startup_event():
     global sage
     package_path = os.path.dirname(os.path.abspath(__file__))
     sage = SimilarityEmbedder.load(f'{package_path}/production_model/')
+    #force the index to be trained
+    sage.train_faiss = True
+    sage.index.nprobe = 10
+    assert sage.index.is_trained
 
 @app.get("/")
 def read_root():

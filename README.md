@@ -31,7 +31,7 @@ untrained_embeddings =  sage.embeddings
 ```
 How do the embeddings look? Even with no training of the graph neural network weights, the embeddings don't do a terrible job  dividing the two communities. The nodes in the Instructor community are blue and the nodes in the Administrator community are red.
 
-![untrained_example_supervised](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_supervised.png)
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_supervised.png" alt="drawing" width="600"/>
 
 With one command, we can improve the embeddings with supervised learning with a triplet loss. 
 
@@ -39,11 +39,11 @@ With one command, we can improve the embeddings with supervised learning with a 
 epochs, batch_size = 150, 15
 sage.train(epochs, batch_size)
 ```
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif" alt="drawing" width="500"/>
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif" alt="drawing" width="600"/>
 
 The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner. 
 
-![unsupervisedgif](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/unsupervised.gif)
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/unsupervised.gif" alt="drawing" width="600"/>
 
 In this case, the unsupervised training actually seems to do a slightly better job of dividing the two communities.
 
@@ -53,7 +53,8 @@ What if we have a very large graph which is expensive and slow to train? Often, 
 sage = SimilarityEmbedder(2,distance='l2',feature_dim=512,hidden_dim=512)
 untrained_embeddings_large =  sage.embeddings
 ```
-![untrained_example_large](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_large.png)
+
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_large.png" alt="drawing" width="600"/>
 
 This looks nearly as good as the trained version of the small network, but no training was required! Once we have embeddings that we are happy with, we can query a specific node or nodes to get its nearest neighbors in a single line.
 

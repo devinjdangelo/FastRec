@@ -39,13 +39,15 @@ With one command, we can improve the embeddings with supervised learning with a 
 epochs, batch_size = 150, 15
 sage.train(epochs, batch_size)
 ```
-![supervisedgif](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif)
+<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif" alt="drawing" width="150"/>
 
 The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner. 
 
 ![unsupervisedgif](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/unsupervised.gif)
 
-What if we have a very large graph which is expensive and slow to train? Often, the untrained performance of the embeddings will improve if we increate the size of our graph neural network (in terms of width and # of parameters).  
+In this case, the unsupervised training actually seems to do a slightly better job of dividing the two communities.
+
+What if we have a very large graph which is expensive and slow to train? Often, the untrained performance of the embeddings will improve if we increase the size of our graph neural network (in terms of width and # of parameters).  
 
 ```python
 sage = SimilarityEmbedder(2,distance='l2',feature_dim=512,hidden_dim=512)

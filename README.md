@@ -14,7 +14,9 @@ A dockerfile is included with all dependencies needed. Simply clone the repo, bu
 
 ## Usage
 
-As an example, we can generate embeddings for [Zachary's karate club](https://en.wikipedia.org/wiki/Zachary%27s_karate_club) graph. First, convert the graph into a node and edgelist format.
+As an example, we can generate embeddings for [Zachary's karate club](https://en.wikipedia.org/wiki/Zachary%27s_karate_club) graph. See [karateclub.py](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/karateclub.py) for the full script to replicate the below.
+
+First, convert the graph into a node and edgelist format.
 
 ```python
 import networkx as nx

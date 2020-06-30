@@ -77,7 +77,7 @@ Each nodes nearest neighbor is itself with a distance of 0. The Admin is closest
 
 ## Recommender API
 
-We can share the reccomender system as an API in a single line. No args are needed to test over localhost, but we can optionally pass in any args accepted by [uvicorn](https://www.uvicorn.org/deployment/).
+We can share the recommender system as an API in a single line. No args are needed to test over localhost, but we can optionally pass in any args accepted by [uvicorn](https://www.uvicorn.org/deployment/).
 
 ```python
 host, port = 127.0.0.1, 8000

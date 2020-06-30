@@ -83,7 +83,7 @@ We can share the recommender system as an API in a single line. No args are need
 host, port = 127.0.0.1, 8000
 sage.start_api(host=host,port=port)
 ```
-Now we can query the reccomender from any other script on the network.
+Now we can query the recommender from any other script on the network.
 
 ```python
 import requests

@@ -80,7 +80,7 @@ Once we have embeddings that we are happy with, we can query a specific node or 
 sage.query_neighbors(['0','33'],k=5)
 {'0': {'neighbors': ['0', '13', '16', '6', '5'], 'distances': [0.0, 0.001904212054796517, 0.005100540816783905, 0.007833012379705906, 0.008420777507126331]}, '33': {'neighbors': ['33', '27', '31', '28', '32'], 'distances': [0.0, 0.0005751167191192508, 0.0009900123113766313, 0.001961079193279147, 0.006331112235784531]}}
 ```
-Each nodes nearest neighbor is itself with a distance of 0. The Admin is closest to nodes 13, 16, 6, and 5, all of which are in fact part of the Admin community. The Instructor is closest to 27, 31, 28, and 32, all of which are part of the Instructor community. 
+Each node's nearest neighbor is itself with a distance of 0. The Admin is closest to nodes 13, 16, 6, and 5, all of which are in fact part of the Admin community. The Instructor is closest to 27, 31, 28, and 32, all of which are part of the Instructor community. 
 
 ## Reddit Post Recommender
 
@@ -118,7 +118,7 @@ print(perf)
 sage.start_api()
 ```
 
-The performance stats indicate that on average 86% of the top 10 recommendations for a post are in the same subreddit. About 95% of all posts have at least 1 recommendation in the same subreddit among its top 10 recommendations. We could optionally train our embeddings with supervised or unsupervised learning from here, but for now this performance is plenty good. We can now query our API over the network.
+The performance stats indicate that on average 86% of the top 10 recommendations for a post are in the same subreddit. About 95% of all posts have at least 1 recommendation in the same subreddit among its top 10 recommendations. We could optionally train our embeddings with supervised or unsupervised learning from here, but for now this performance is good enough. We can now query our API over the network.
 
 ## Recommender API
 
@@ -129,7 +129,7 @@ host, port = 127.0.0.1, 8000
 sage.start_api(host=host,port=port)
 ```
 
-This method of starting the API is conveinient but has some downsides in the current implementation. Some data will be duplicated in memory, so if your graph is taking up most of your current memory this deployment may fail. You can avoid this issue by instead launching the API from a separate script using uvicorn directly.
+This method of starting the API is convenient but has some downsides in the current implementation. Some data will be duplicated in memory, so if your graph is taking up most of your current memory this deployment may fail. You can avoid this issue by instead launching the API from a separate script using uvicorn directly.
 
 ```bash
 uvicorn RecAPI:app

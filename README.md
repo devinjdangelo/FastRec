@@ -84,7 +84,7 @@ Each nodes nearest neighbor is itself with a distance of 0. The Admin is closest
 
 ## Reddit Post Recommender
 
-In under 5 minutes and with just 10 lines of code, we can create and deploy a Reddit post recommender based on a graph dataset with over 100m edges. We will use the Reddit post dataset from the [GraphSage](https://cs.stanford.edu/people/jure/pubs/graphsage-nips17.pdf) paper. Each node represets a post and an edge between posts represents one user who commented on both posts. Each node is labeled with one of 41 subreddits, which group the posts by theme or user interest. The original paper focused on correctly classifying the subreddit of each post. Here, we will simply say that a post recommendation is reasonable if it is in the same subreddit as the query post. 
+In under 5 minutes and with just 10 lines of code, we can create and deploy a Reddit post recommender based on a graph dataset with over 100m edges. We will use the Reddit post dataset from the [GraphSage](https://cs.stanford.edu/people/jure/pubs/graphsage-nips17.pdf) paper. Each node represets a post and an edge between posts represents one user who commented on both posts. Each node is labeled with one of 41 subreddits, which group the posts by theme or user interest. The original paper focused on correctly classifying the subreddit of each post. Here, we will simply say that a post recommendation is reasonable if it is in the same subreddit as the query post. See [reddit.py](https://github.com/devinjdangelo/FastRec/blob/master/examples/reddit.py) for the full script to replicate the below.
 
 First, we download the Reddit Dataset. 
 

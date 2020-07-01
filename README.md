@@ -101,7 +101,7 @@ nodes = pd.DataFrame(data.labels,dtype=np.int32,columns=['labels'])
 Now we can set up our embedder. For larger graphs, it will be much faster to use gpu for both torch and faiss computations.
 
 ```python
-from sse import SimilarityEmbedder
+from fastrec import GraphRecommender
 sage = GraphRecommender(128, feature_dim=512, hidden_dim=256, 
     torch_device='cuda', faiss_gpu=True, distance='cosine')
 sage.add_nodes(nodes.index.to_numpy())
@@ -132,7 +132,7 @@ sage.start_api(host=host,port=port)
 This method of starting the API is conveinient but has some downsides in the current implementation. Some data will be duplicated in memory, so if your graph is taking up most of your current memory this deployment may fail. You can avoid this issue by instead launching the API from a separate script using uvicorn directly.
 
 ```bash
-uvicorn SageAPI:app
+uvicorn RecAPI:app
 ```
 
 Now we can query the recommender from any other script on the network.

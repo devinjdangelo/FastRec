@@ -191,9 +191,9 @@ class SimilarityEmbedder:
             raise ValueError('edgelist must have exactly two columns, each row representing an edge between two nodes')
         
         #we must cast to str for the api to work
-        edgelist.iloc[:,0] = edgelist.iloc[:,0].astype(str)
-        edgelist.iloc[:,1] = edgelist.iloc[:,1].astype(str)
-        nodelist[nodeid] = nodelist[nodeid].astype(str)
+        #edgelist.iloc[:,0] = edgelist.iloc[:,0].astype(str)
+        #edgelist.iloc[:,1] = edgelist.iloc[:,1].astype(str)
+        #nodelist[nodeid] = nodelist[nodeid].astype(str)
 
         #validate that nodelist and edgelist are valid
         n1 = edgelist.iloc[:,:1].drop_duplicates()
@@ -322,7 +322,7 @@ class SimilarityEmbedder:
                 embeddings = self.embeddings[self.entity_mask]
             
             if self.train_faiss:
-                training_points = min(len(self.node_ids)//10,10000)
+                training_points = min(len(self.node_ids)//1000+1,10000)
                 self._index = faiss.IndexIVFFlat(self._index, self.embedding_dim, training_points)
                 self._index.train(embeddings)
 
@@ -374,8 +374,13 @@ class SimilarityEmbedder:
         if not self._masks_set:
             self.set_masks()
 
-        intids = [self.node_ids.loc[self.node_ids.id == str(node)].intID.iloc[0]
-                    for node in nodelist]
+        try:
+            intids = [self.node_ids.loc[self.node_ids.id == node].intID.iloc[0]
+                        for node in nodelist]
+        except IndexError:
+            intids = [self.node_ids.loc[self.node_ids.id == int(node)].intID.iloc[0]
+                        for node in nodelist]
+
         inputs = self.embeddings[intids,:]
         D, I = self._search_index(inputs,k)
         faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask]

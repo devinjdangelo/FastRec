@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 from dgl.data import RedditDataset
-from sse import SimilarityEmbedder
+from fastrec import GraphRecommender
 
 
 data = RedditDataset(self_loop=True)
@@ -11,7 +11,7 @@ e1, e2 = e1.numpy(), e2.numpy()
 nodes = pd.DataFrame(data.labels,dtype=np.int32,columns=['labels'])
 del data #free up some memory
 
-sage = SimilarityEmbedder(128, feature_dim=512, hidden_dim=256, 
+sage = GraphRecommender(128, feature_dim=512, hidden_dim=256, 
     torch_device='cuda', faiss_gpu=True, distance='cosine')
 sage.add_nodes(nodes.index.to_numpy())
 sage.add_edges(e1,e2)

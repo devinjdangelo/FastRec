@@ -45,7 +45,7 @@ FAISS_NODES_TO_CLUSTERS = 1000
 #which I haven't tested thoroughly yet.
 MAXIMUM_FAISS_CLUSTERS = 10000
   
-class SimilarityEmbedder:
+class GraphRecommender:
     """Rapidly trains similarity embeddings for graphs and generates recomendations
 
     Attributes
@@ -254,9 +254,12 @@ class SimilarityEmbedder:
                 self.G.readonly(False)
 
             self.G.add_edges(edgedf.intID,edgedf.intID2)
-            pbar.update(1)
 
-        pbar.close()
+            if chunks>1:
+                pbar.update(1)
+
+        if chunks>1:
+            pbar.close()
 
         self._masks_set = False
         self._embeddings = None 
@@ -772,7 +775,7 @@ class SimilarityEmbedder:
         production_path = package_path + '/production_model'
         self.save(production_path)
         #this import cant be at the top level to prevent circular depedency
-        from .SageAPI import app
+        from RecAPI import app
         uvicorn.run(app,*args,**kwargs)
 
 

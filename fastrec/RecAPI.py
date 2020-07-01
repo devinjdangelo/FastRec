@@ -3,7 +3,7 @@ import os
 import numpy as np
 from fastapi import FastAPI
 
-from SageSimEmbed import SimilarityEmbedder
+from GraphSimRec import GraphRecommender
 
 app = FastAPI()
 
@@ -13,7 +13,7 @@ def startup_event():
 
     global sage
     package_path = os.path.dirname(os.path.abspath(__file__))
-    sage = SimilarityEmbedder.load(f'{package_path}/production_model/',device='cpu',faiss_gpu=False)
+    sage = GraphRecommender.load(f'{package_path}/production_model/',device='cpu',faiss_gpu=False)
     #force the index to be trained
     sage.train_faiss = True
     sage.index.nprobe = 100

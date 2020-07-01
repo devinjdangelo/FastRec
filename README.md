@@ -1,12 +1,12 @@
-# GraphSimEmbed
+# FastRec
 
 Graph neural networks are capable of capturing the structure and relationships between nodes in a graph as dense vectors. 
 With these dense vectors, we can identify pairs of nodes that are similar, identify communities and clusters, or train
 a linear classification model with the dense vectors as inputs. 
 
-This project automates the entire pipeline from node/edge graph data to generate embeddings, train and fine tune those embeddings, create and train a Facebook AI Similarity Search Index (faiss), and deploy an API to query the index over the network. GraphSimEmbed handles all of the boilerplate code, handling gpu/cpu memory management, and passing data between pytorch, Deep Graph Library (DGL), faiss, and fastapi. 
+This project automates the entire pipeline from node/edge graph data to generate embeddings, train and fine tune those embeddings, create and train a Facebook AI Similarity Search Index (faiss), and deploy a recommender API to query the index over the network. FastRec handles all of the boilerplate code, handling gpu/cpu memory management, and passing data between pytorch, Deep Graph Library (DGL), faiss, and fastapi. 
 
-The code is intended to be as scalable as possible, with the only limitation being the memory available to store the graph. The code adapts the implementation of [GraphSage](https://cs.stanford.edu/people/jure/pubs/graphsage-nips17.pdf) from the [DGL reference implementation](https://github.com/dmlc/dgl/tree/master/examples/pytorch/graphsage). GraphSimEmbed has been tested on graphs with up to 10 million nodes and 100 million edges and was able to generate and train embeddings, train a faiss index, and begin answering api queries in minutes. With sufficient memory, it should be able to scale to billions of nodes and edges. Distributed training is not currently implemented, but could further improve scalability. 
+The code is intended to be as scalable as possible, with the only limitation being the memory available to store the graph. The code adapts the implementation of [GraphSage](https://cs.stanford.edu/people/jure/pubs/graphsage-nips17.pdf) from the [DGL reference implementation](https://github.com/dmlc/dgl/tree/master/examples/pytorch/graphsage). GraphSimEmbed has been tested on graphs with up to 1 million nodes and 100 million edges and was able to generate and train embeddings, train a faiss index, and begin answering api queries in minutes. With sufficient memory, it should be able to scale to billions of nodes and edges. Distributed training is not currently implemented, but could further improve scalability. 
 
 ## Installation
 
@@ -29,10 +29,10 @@ attributes = pd.read_csv('./karate_attributes.csv')
 Then we can initialize an embedder, add the data, and generate node embeddings.
 
 ```python
-from sse import SimilarityEmbedder
+from fastrec import GraphRecommender
 #initialize our embedder to embed into 2 dimensions and 
 #use euclidan distance as the metric for similarity.
-sage = SimilarityEmbedder(2,distance='l2')
+sage = GraphRecommender(2,distance='l2')
 sage.add_nodes(nodes)
 sage.add_edges(e1,e2)
 sage.add_edges(e2,e1)
@@ -65,7 +65,7 @@ In this case, the unsupervised training actually seems to do a slightly better j
 What if we have a very large graph which is expensive and slow to train? Often, the untrained performance of the embeddings will improve if we increase the size of our graph neural network (in terms of width and # of parameters).  
 
 ```python
-sage = SimilarityEmbedder(2,distance='l2',feature_dim=512,hidden_dim=512)
+sage = GraphRecommender(2,distance='l2',feature_dim=512,hidden_dim=512)
 untrained_embeddings_large =  sage.embeddings
 ```
 
@@ -102,7 +102,7 @@ Now we can set up our embedder. For larger graphs, it will be much faster to use
 
 ```python
 from sse import SimilarityEmbedder
-sage = SimilarityEmbedder(128, feature_dim=512, hidden_dim=256, 
+sage = GraphRecommender(128, feature_dim=512, hidden_dim=256, 
     torch_device='cuda', faiss_gpu=True, distance='cosine')
 sage.add_nodes(nodes.index.to_numpy())
 sage.add_edges(e1,e2)
@@ -148,7 +148,7 @@ r.json()
 {0: {'neighbors': [0, 114546, 118173, 123258, 174705, 99438, 51354, 119874, 203176, 101864], 'distances': [0.9999998807907104, 0.9962959289550781, 0.9962303042411804, 0.9961680173873901, 0.9961460828781128, 0.9961054921150208, 0.9961045980453491, 0.9960995316505432, 0.9960215091705322, 0.9960126280784607]}}
 ```
 
-Because we use a trained faiss index for our deployed API backend, requests should be returned very quickly even for large graphs. For the Reddit post recommender described above, the default API respondsin about 82ms.
+Because we use a trained faiss index for our deployed API backend, requests should be returned very quickly even for large graphs. For the Reddit post recommender described above, the default API responds in about 82ms.
 
 ```python
 import random
@@ -166,7 +166,7 @@ sage.save('/example/directory')
 You can likewise restore your session in a single line. 
 
 ```python
-sage = SimilarityEmbedder.load('/example/directory')
+sage = GraphRecommender.load('/example/directory')
 ```
 
 Note that the loading method is a classmethod, so you do not need to initialize a new instance of SimilarityEmbedder to restore from disk. The save and load functionality keeps track of the args you used to initialize the class for you.

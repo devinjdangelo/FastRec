@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import tqdm
 import pathlib
 
-from sse import SimilarityEmbedder
+from fastrec import GraphRecommender
 
 def animate(labelsnp,all_embeddings,mask):
     labelsnp = labelsnp[mask]
@@ -41,7 +41,7 @@ if __name__=='__main__':
     e1,e2 = zip(*g.edges)
     attributes = pd.read_csv('./karate_attributes.csv')
 
-    sage = SimilarityEmbedder(2,distance='l2')
+    sage = GraphRecommender(2,distance='l2')
     sage.add_nodes(nodes)
     sage.add_edges(e1,e2)
     sage.add_edges(e2,e1)

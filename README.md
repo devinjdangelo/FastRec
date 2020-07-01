@@ -12,7 +12,7 @@ The code is intended to be as scalable as possible, with the only limitation bei
 
 A dockerfile is included with all dependencies needed. Simply clone the repo, build the dockerfile, and run the code in the built image. Nvidia docker is needed for gpu support. There is not currently a pip or conda package.
 
-## Usage
+## Basic Usage: Karate Club Communities
 
 As an example, we can generate embeddings for [Zachary's karate club](https://en.wikipedia.org/wiki/Zachary%27s_karate_club) graph. See [karateclub.py](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/karateclub.py) for the full script to replicate the below.
 
@@ -20,16 +20,23 @@ First, convert the graph into a node and edgelist format.
 
 ```python
 import networkx as nx
-edges = nx.to_pandas_edgelist(nx.karate_club_graph())
-nodes = pd.read_csv('./karate_attributes.csv')
+g = nx.karate_club_graph()
+nodes = list(g.nodes)
+e1,e2 = zip(*g.edges)
+attributes = pd.read_csv('./karate_attributes.csv')
 ```
 
 Then we can initialize an embedder, add the data, and generate node embeddings.
 
 ```python
 from sse import SimilarityEmbedder
+#initialize our embedder to embed into 2 dimensions and 
+#use euclidan distance as the metric for similarity.
 sage = SimilarityEmbedder(2,distance='l2')
-sage.add_data(edges,nodes,nodeid='node',classid='community')
+sage.add_nodes(nodes)
+sage.add_edges(e1,e2)
+sage.add_edges(e2,e1)
+sage.update_labels(attributes.community)
 untrained_embeddings =  sage.embeddings
 ```
 How do the embeddings look? Even with no training of the graph neural network weights, the embeddings don't do a terrible job  dividing the two communities. The nodes in the Instructor community are blue and the nodes in the Administrator community are red.
@@ -75,6 +82,44 @@ sage.query_neighbors(['0','33'],k=5)
 ```
 Each nodes nearest neighbor is itself with a distance of 0. The Admin is closest to nodes 13, 16, 6, and 5, all of which are in fact part of the Admin community. The Instructor is closest to 27, 31, 28, and 32, all of which are part of the Instructor community. 
 
+## Reddit Post Recommender
+
+In under 5 minutes and with just 10 lines of code, we can create and deploy a Reddit post recommender based on a graph dataset with over 100m edges. We will use the Reddit post dataset from the [GraphSage](https://cs.stanford.edu/people/jure/pubs/graphsage-nips17.pdf) paper. Each node represets a post and an edge between posts represents one user who commented on both posts. Each node is labeled with one of 41 subreddits, which group the posts by theme or user interest. The original paper focused on correctly classifying the subreddit of each post. Here, we will simply say that a post recommendation is reasonable if it is in the same subreddit as the query post. 
+
+First, we download the Reddit Dataset. 
+
+```python
+import pandas as pd
+import numpy as np
+from dgl.data import RedditDataset
+data = RedditDataset(self_loop=True)
+e1, e2 = data.graph.all_edges()
+e1, e2 = e1.numpy(), e2.numpy()
+nodes = pd.DataFrame(data.labels,dtype=np.int32,columns=['labels'])
+```
+
+Now we can set up our embedder. For larger graphs, it will be much faster to use gpu for both torch and faiss computations.
+
+```python
+from sse import SimilarityEmbedder
+sage = SimilarityEmbedder(128, feature_dim=512, hidden_dim=256, 
+    torch_device='cuda', faiss_gpu=True, distance='cosine')
+sage.add_nodes(nodes.index.to_numpy())
+sage.add_edges(e1,e2)
+sage.update_labels(nodes.labels)
+```
+
+Finally, we can evaluate our untrained embedding and deploy our API.
+
+```python
+perf = sage.evaluate(test_levels=[10,5])
+print(perf)
+{'Top 10 neighbors': {'Share >=1 correct neighbor': 0.9517867490824802, 'Share of correct neighbors': 0.8623741763784262}, 'Top 5 neighbors': {'Share >=1 correct neighbor': 0.9417079818856909, 'Share of correct neighbors': 0.8764973279247956}}
+sage.start_api()
+```
+
+The performance stats indicate that on average 86% of the top 10 recommendations for a post are in the same subreddit. About 95% of all posts have at least 1 recommendation in the same subreddit among its top 10 recommendations. We could optionally train our embeddings with supervised or unsupervised learning from here, but for now this performance is plenty good. We can now query our API over the network.
+
 ## Recommender API
 
 We can share the recommender system as an API in a single line. No args are needed to test over localhost, but we can optionally pass in any args accepted by [uvicorn](https://www.uvicorn.org/deployment/).
@@ -83,6 +128,13 @@ We can share the recommender system as an API in a single line. No args are need
 host, port = 127.0.0.1, 8000
 sage.start_api(host=host,port=port)
 ```
+
+This method of starting the API is conveinient but has some downsides in the current implementation. Some data will be duplicated in memory, so if your graph is taking up most of your current memory this deployment may fail. You can avoid this issue by instead launching the API from a separate script using uvicorn directly.
+
+```bash
+uvicorn SageAPI:app
+```
+
 Now we can query the recommender from any other script on the network.
 
 ```python
@@ -90,16 +142,18 @@ import requests
 #configure url, default is localhost
 apiurl = 'http://127.0.0.1:8000/{}/{}/{}'
 example_node = '0'
-k = 5
-r = requests.get(apiurl.format('knn',nodeid,k))
+k = 10
+r = requests.get(apiurl.format('knn',example_node,k))
 r.json()
-{'0': {'neighbors': ['0', '13', '16', '6', '5'], 'distances': [0.0, 0.001904212054796517, 0.005100540816783905, 0.007833012379705906, 0.008420777507126331]}}
+{0: {'neighbors': [0, 114546, 118173, 123258, 174705, 99438, 51354, 119874, 203176, 101864], 'distances': [0.9999998807907104, 0.9962959289550781, 0.9962303042411804, 0.9961680173873901, 0.9961460828781128, 0.9961054921150208, 0.9961045980453491, 0.9960995316505432, 0.9960215091705322, 0.9960126280784607]}}
 ```
 
-This method of starting the API is conveinient but has some downsides in the current implementation. Some data will be duplicated in memory, so if your graph is taking up most of your current memory this deployment may fail. You can avoid this issue by instead launching the API from a separate script using uvicorn directly.
+Because we use a trained faiss index for our deployed API backend, requests should be returned very quickly even for large graphs. For the Reddit post recommender described above, the default API respondsin about 82ms.
 
-```bash
-uvicorn SageAPI:app
+```python
+import random
+%timeit r = requests.get(apiurl.format('knn',random.randint(0,232964),k))
+82.3 ms ± 5.42 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
 ```
 
 ## Save and Load

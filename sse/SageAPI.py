@@ -13,10 +13,10 @@ def startup_event():
 
     global sage
     package_path = os.path.dirname(os.path.abspath(__file__))
-    sage = SimilarityEmbedder.load(f'{package_path}/production_model/')
+    sage = SimilarityEmbedder.load(f'{package_path}/production_model/',device='cpu',faiss_gpu=False)
     #force the index to be trained
     sage.train_faiss = True
-    sage.index.nprobe = 10
+    sage.index.nprobe = 100
     assert sage.index.is_trained
 
 @app.get("/")
@@ -24,8 +24,8 @@ def read_root():
     return {"GraphData": sage.G.__str__()}
 
 
-@app.get("/knn/{hashid}/{k}/{nprobe}")
-def knn(hashid: str, k: int = 5, nprobe: int=10):
+@app.get("/knn/{hashid}/{k}")
+def knn(hashid: str, k: int = 5):
     """Returns to nearest k nodes in the graph based on cosine distance using faiss
     Args
     ----
@@ -35,7 +35,6 @@ def knn(hashid: str, k: int = 5, nprobe: int=10):
 
     Returns:
     K nearest neighbors and cosine similarities"""
-    sage.index.nprobe = nprobe
     return sage.query_neighbors([hashid], k)
 
 @app.get("/knn_jacard/{hashid}/{k}")

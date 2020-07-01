@@ -33,6 +33,17 @@ import faiss
 import uvicorn
 
 from torchmodels import *
+
+#this is the maximum edges we will ad at once to keep temp memory usage down
+MAX_ADD_EDGES = 1e6
+
+# this is the target ratio of nodes to faiss clusters for index training
+# roughly matches what the faiss warning messages suggest in testing
+FAISS_NODES_TO_CLUSTERS = 1000
+
+#Arbitrary... not sure what this should be long term. Depends on memory usage
+#which I haven't tested thoroughly yet.
+MAXIMUM_FAISS_CLUSTERS = 10000
   
 class SimilarityEmbedder:
     """Rapidly trains similarity embeddings for graphs and generates recomendations
@@ -147,99 +158,178 @@ class SimilarityEmbedder:
                         train_faiss_index)
 
 
-    def add_data(self, edgelist, nodelist, nodeid, classid=None, feature_node_flag = None):
-        """Updates graph data with a new edgelist and nodelist. Maps each nodeid to an integer id. 
-        input nodeids can be any unique identifier (strings, floats, integers ect...).
-        They will internally be mapped to a sequential integer id which DGL uses. self.nodeids
-        keeps track of the mappings between input identifiers and the sequential integer ids.
-        If you run out of memory when calling this method, split edglist and nodelist into chunks and call
-        this method once for each chunk.
+    def add_nodes(self, nodearray, skip_duplicates=False):
+        """Define nodes by passing an array (or array like object). Nodes
+        can be identified by any data type (even mixed data types), but each
+        node must be unique. An exception is raised if all nodes are not unique
+        including if the same node is attempted to be added in two calls to this 
+        method. Each node is mapped to a unique integer id based on the order
+        they are added.
 
         Args
         ----
-        edgelist : pandas data frame
-            dataframe with edges between nodes, edges are assumed to be bidrectional and 
-            should only be in the dataframe once (e.g. a <-> b means do not include b <-> a)
-            should only have two columns with each row representing a connection between two
-            node ids.
-        nodelist : pandas data frame
-            dataframe which maps nodeids to optional classids and feature_node_flags.
-            Each node in each edge in edgelist should correspond to a node in nodelist
-        nodeid : str
-            column name in nodelist which uniquely identifies each node. 
-        classid : str
-            optional column name in nodelist which assigns a class to each node. 
-            if only some nodes have a known class, then assign unknown class nodes to
-            None or np.nan. 
-        feature_node_flag : str
-            optional column name in nodelist which flags a given node to be
-            used as a feature only. That is, it is included in the graph to enrich
-            the embeddings of other nodes, but it is excluded from similarity search
-            and the faiss index."""
-
-        if classid is None:
-            classid1 = 'classid'
-            nodelist[classid] = None 
-
-        if feature_node_flag is None:
-            feature_node_flag = 'feature_node_flag'
-            nodelist[feature_node_flag] = False
-
-        try:
-            assert len(edgelist.columns) == 2
-        except AssertionError:
-            raise ValueError('edgelist must have exactly two columns, each row representing an edge between two nodes')
+        nodearray : numpy array (or array-like object)
+            array containing the identifiers of each node to be added
+        skip_duplicates : bool
+            if true, ignore nodes which have already been added. If False, raise error.
+        """
         
-        #we must cast to str for the api to work
-        #edgelist.iloc[:,0] = edgelist.iloc[:,0].astype(str)
-        #edgelist.iloc[:,1] = edgelist.iloc[:,1].astype(str)
-        #nodelist[nodeid] = nodelist[nodeid].astype(str)
+        ninputnodes = len(nodearray)
+        nodedf = pd.DataFrame(nodearray, columns=['id'])
 
-        #validate that nodelist and edgelist are valid
-        n1 = edgelist.iloc[:,:1].drop_duplicates()
-        n1.columns = ['id']
-        n2 = edgelist.iloc[:,1:2].drop_duplicates()
-        n2.columns = ['id']
-        nodes = pd.concat([n1,n2])
-        nodes = nodes.drop_duplicates()
-        nodes = nodes.merge(nodelist,left_on='id',right_on=nodeid,how='left',suffixes=('','_merged'))
-        
-        try:
-            assert nodes[feature_node_flag].isna().sum() == 0
-        except AssertionError:
-            raise ValueError('Nodes in edgelist are not all identified in nodelist. Please add all nodes in edgelist to nodelist.')
+        if len(nodedf) != len(nodedf.drop_duplicates()):
+            raise ValueError('Provided nodeids are not unique. Please pass an array of unique identifiers.')
 
-        nodes = nodes.merge(self.node_ids,on='id',how='left',suffixes=('','_merged'))
-        num_new_nodes = int(nodes.intID.isna().sum())
+        nodes_already_exist = nodedf.merge(self.node_ids,on='id',how='inner')
+        if len(nodes_already_exist)>0 and not skip_duplicates:
+            raise ValueError(
+            'Some provided nodes have already been added to the graph. See node_ids.ids.')
+        elif len(nodes_already_exist)>0 and skip_duplicates:
+            #get rid of the duplicates
+            nodes_already_exist['dropflag'] = True 
+            nodedf = nodedf.merge(nodes_already_exist,on='id',how='left')
+            nodedf['dropflag'] = ~pd.isna(nodedf.dropflag)
+            nodedf = nodedf.drop(nodedf[nodedf.dropflag].index)
+            nodedf = nodedf[['id']]
+            
+
         current_maximum_id = self.node_ids.intID.max()
+        num_new_nodes = len(nodedf)
+
         start = (current_maximum_id+1)
         if np.isnan(start):
             start = 0
         end = start + num_new_nodes
-        new_nodes = pd.isna(nodes.intID)
-        nodes.loc[new_nodes,'intID'] = list(range(start,end))
-        update_nodes = nodes[new_nodes]
-        update_nodes = update_nodes[['id','intID', classid, feature_node_flag]]
-        update_nodes.columns = ['id', 'intID', 'classid', 'feature_flag']
-        self.node_ids = pd.concat([self.node_ids,update_nodes])
 
-        nodeid1, nodeid2 = edgelist.columns
-        edgelist = edgelist.merge(nodes,left_on=nodeid1,right_on='id',how='left')
-        edgelist = edgelist.merge(nodes,left_on=nodeid2,right_on='id',how='left',suffixes=('','2'))
-        edgelist = edgelist[['intID','intID2']]
+        nodedf['intID'] = range(start,end)
+        nodedf['classid'] = None 
+        nodedf['feature_flag'] = False
+
+        self.node_ids = pd.concat([self.node_ids,nodedf])
+
+        self._masks_set = False
 
         if self.G.is_readonly:
             self.G = dgl.as_immutable_graph(self.G)
             self.G.readonly(False)
         self.G.add_nodes(num_new_nodes)
-        self.G.add_edges(edgelist.intID.tolist(),edgelist.intID2.tolist())
-        self.G.add_edges(edgelist.intID2.tolist(),edgelist.intID.tolist())
-        
 
-        #reset internal flag that embeddings and index need to be recomputed
-        self._embeddings = None 
-        self._index = None 
         self._masks_set = False
+        self._embeddings = None 
+        self._index = None       
+
+
+    def add_edges(self, n1, n2):
+        """Adds edges to the DGL graph. Nodes must be previously defined by
+        add_nodes or an exception is raised. Edges are directed. To define
+        a undirected graph, include both n1->n2 and n2->n1 in the graph.
+
+        Args
+        ----
+        n1 : numpy array (or array-like object)
+            first node in the edge (n1->n2)
+        n2 : numpy array (or array-like object)
+            second node in the edge (n1->n2)
+        """
+        edgedf_all = pd.DataFrame(n1,columns=['n1'])
+        edgedf_all['n2'] = n2
+
+        chunks = int(max(len(edgedf_all)//MAX_ADD_EDGES,1))
+        edgedf_all = np.array_split(edgedf_all, chunks)
+
+        if chunks>1:
+            pbar = tqdm.tqdm(total=chunks)
+
+        for i in range(chunks):
+            edgedf = edgedf_all.pop()
+            edgedf = edgedf.merge(self.node_ids,left_on='n1',right_on='id',how='left')
+            edgedf = edgedf.merge(self.node_ids,left_on='n2',right_on='id',how='left',suffixes=('','2'))
+            edgedf = edgedf[['intID','intID2']]
+
+            if len(edgedf) != len(edgedf.dropna()):
+                raise ValueError('Some edges do not correspond to any known node. Please add with add_nodes method first.')
+
+            if self.G.is_readonly:
+                self.G = dgl.as_immutable_graph(self.G)
+                self.G.readonly(False)
+
+            self.G.add_edges(edgedf.intID,edgedf.intID2)
+            pbar.update(1)
+
+        pbar.close()
+
+        self._masks_set = False
+        self._embeddings = None 
+        self._index = None     
+
+    def _update_node_ids(self,datadf):
+        """Overwrites existing information about nodes with new info
+        contained in a dataframe. Temporarily sets id as the index to use
+        built in pandas update method aligned on index.
+
+        Args
+        ----
+        datadf : data frame
+            has the same structure as self.node_ids
+        """
+
+        datadf.set_index('id',inplace=True,drop=True)
+        self.node_ids.set_index('id',inplace=True,drop=True)
+        self.node_ids.update(datadf, overwrite=True)
+        self.node_ids.reset_index(inplace=True)
+
+    def update_labels(self,labels):
+        
+        """Updates nodes by adding a label (or class). Existing class label
+        is overridden if one already exists. Any node which does not have a 
+        known class has a label of None. Any data type can be a valid class 
+        label except for None which is reserved for unknown class. All nodes
+        included in the update must be previously defined by add_nodes or
+        an exception is raised.
+
+        Args
+        ----
+        labels : dictionary or pandas series
+            maps node ids to label, i.e. classid. If pandas series the index acts as the dictionary key."""
+
+        labeldf = pd.DataFrame(labels.items(), columns=['id','classid'])
+        labeldf = labeldf.merge(self.node_ids,on='id',how='left',suffixes=('','2'))
+
+        if labeldf['intID'].isna().sum() > 0:
+            raise ValueError('Some nodes in update do not exist in graph. Add them first with add_nodes.')
+
+        labeldf = labeldf[['id','intID','classid','feature_flag']]
+        self._update_node_ids(labeldf)
+
+        self._masks_set = False
+        self._embeddings = None 
+        self._index = None     
+
+    def update_feature_flag(self,flags):
+        """Updates node by adding a feature flag. This can be True or False.
+        If the feature flag is True, the node will not be included in any 
+        recommender index. It will still be included in the graph to enrich
+        the embeddings of the other nodes, but it will never be returned as
+        a recommendation as a similar node. I.e. if True this node is a feature
+        of other nodes only and not interesting as an entity of its own right.
+
+        Args
+        ----
+        flags : dictionary or pandas series
+            maps node ids to feature flag. If pandas series the index acts as the dictionary key."""
+
+        featuredf = pd.DataFrame(flags.items(), columns=['id','feature_flag'])
+        featuredf = featuredf.merge(self.node_ids,on='id',how='left',suffixes=('','2'))
+
+        if featuredf['intID'].isna().sum() > 0:
+            raise ValueError('Some nodes in update do not exist in graph. Add them first with add_nodes.')
+
+        featuredf = featuredf[['id','intID','classid','feature_flag']]
+        self._update_node_ids(featuredf)
+
+        self._masks_set = False
+        self._embeddings = None 
+        self._index = None     
 
     def set_masks(self):
         """Sets train, test, and relevance masks. Needs to be called once after data as been added to graph.
@@ -296,7 +386,8 @@ class SimilarityEmbedder:
         if self._embeddings is None:
             print('computing embeddings for all nodes...')
             with th.no_grad():
-                self._embeddings = self.net.inference(self.G, self.features,self.inference_batch_size,self.device).detach().cpu().numpy()
+                self._embeddings = self.net.inference(
+                    self.G, self.features,self.inference_batch_size,self.device).detach().cpu().numpy()
         return self._embeddings
 
     @property
@@ -322,7 +413,9 @@ class SimilarityEmbedder:
                 embeddings = self.embeddings[self.entity_mask]
             
             if self.train_faiss:
-                training_points = min(len(self.node_ids)//1000+1,10000)
+                training_points = min(
+                    len(self.node_ids)//FAISS_NODES_TO_CLUSTERS+1,
+                    MAXIMUM_FAISS_CLUSTERS)
                 self._index = faiss.IndexIVFFlat(self._index, self.embedding_dim, training_points)
                 self._index.train(embeddings)
 
@@ -388,7 +481,7 @@ class SimilarityEmbedder:
         output = {node:{'neighbors':i,'distances':d.tolist()} for node, d, i in zip(nodelist,D,I)}
         return output
 
-    def evaluate(self, test_only=False):
+    def evaluate(self, test_levels=[5,1], test_only=False):
         """Evaluates performance of current embeddings
 
         Args
@@ -396,10 +489,16 @@ class SimilarityEmbedder:
         test_only : bool
             whether to only test the performance on the test set. If 
             false, all nodes with known class will be tested.
+        test_levels : list of ints
+            each entry is a number of nearest neighbors and we will test
+            if at least one of the neighbors at each level contains a correct
+            neighbor based on node labels. We also test the 
+            total share of the neighbors that have a correct label.
 
         Returns
         -------
-        Share of nodes where at least 1 neighbor in top5 and top1 are of the same class respectively"""
+        dictionary containing details of the performance of the model at each level
+        """
 
         self.net.eval()
 
@@ -411,16 +510,28 @@ class SimilarityEmbedder:
         faiss_labels = self.labels[self.entity_mask]
 
         test_embeddings = self.embeddings[mask]
-        _, I = self._search_index(test_embeddings,6)
 
-        ft1, ft5 = [], []
+        #we need to return the maximum number of neighbors that we want to test
+        #plus 1 since the top neighbor of each node will always be itself, which
+        #we exclude.
+        _, I = self._search_index(test_embeddings,max(test_levels)+1)
+
+        performance = {level:[] for level in test_levels}
+        performance_share = {level:[] for level in test_levels}
         for node, neighbors in enumerate(I):
             label = test_labels[node]
             neighbor_labels = [faiss_labels[n] for n in neighbors[1:]]
-            ft1.append(label==neighbor_labels[0])
-            ft5.append(label in neighbor_labels)
+            for level in test_levels:
+                correct_labels = np.sum([label==nl for nl in neighbor_labels[:level]])
+                #at least one label in the neighbors was correct
+                performance[level].append(correct_labels>0)
+                #share of labels in the neighbors that was correct
+                performance_share[level].append(correct_labels/level)
 
-        return np.mean(ft5), np.mean(ft1)
+        return {f'Top {level} neighbors':
+                {'Share >=1 correct neighbor':np.mean(performance[level]),
+                'Share of correct neighbors':np.mean(performance_share[level])}
+            for level in test_levels}
 
     @staticmethod
     def setup_pairwise_loss_tensors(labelsnp):
@@ -514,7 +625,8 @@ class SimilarityEmbedder:
                     learning_rate = 1e-2,
                     fanouts = [10,25],
                     neg_samples = 1,
-                    return_intermediate_embeddings = False):
+                    return_intermediate_embeddings = False,
+                    test_levels=[5,1]):
         """Trains the network weights to improve the embeddings. Can train via supervised learning with triplet loss,
         semisupervised learning with triplet loss, or fully unsupervised learning.
 
@@ -533,7 +645,9 @@ class SimilarityEmbedder:
         fanouts : list of int
             number of neighbors to sample at each layer for GraphSage
         neg_samples : int
-            number of negative samples to use in unsupervised loss"""
+            number of negative samples to use in unsupervised loss
+        test_levels : list of ints
+            passsed to self.eval, number of neighbors to use for testing accuracy"""
 
         if not self._masks_set:
             self.set_masks()
@@ -560,14 +674,20 @@ class SimilarityEmbedder:
         
 
         
-        testtop5,testtop1 = self.evaluate(test_only=True)
+        perf = self.evaluate(test_levels=test_levels,test_only=True)
 
-        print("Test Top5 {:.4f} | Test Top1 {:.4f}".format(
-                testtop5,testtop1))
+        testtop5, testtop1 = perf['Top 5 neighbors']['Share >=1 correct neighbor'], \
+                                perf['Top 1 neighbors']['Share >=1 correct neighbor']
+
+        testtop5tot, testtop1tot = perf['Top 5 neighbors']['Share of correct neighbors'], \
+                                perf['Top 1 neighbors']['Share of correct neighbors']
+
+        print(testtop5,testtop1,testtop5tot, testtop1tot)
+        print("Test Top5 {:.4f} | Test Top1 {:.4f} | Test Top5 Total {:.4f} | Test Top1 Total {:.4f} ".format(
+                testtop5,testtop1,testtop5tot, testtop1tot))
 
         loss_history = []
-        top5_history = [testtop5]
-        top1_history = [testtop1]
+        perf_history = [perf]
         if return_intermediate_embeddings:
             all_embeddings = []
             all_embeddings.append(self.embeddings)
@@ -627,17 +747,24 @@ class SimilarityEmbedder:
                 all_embeddings.append(self.embeddings)
             loss_history.append(loss.item())
             if epoch % test_every_n_epochs == 0 or epoch==epochs:
-                testtop5,testtop1 = self.evaluate(test_only=True)
-                top5_history.append(testtop5)
-                top1_history.append(testtop1)
 
-                print("Epoch {:05d} | Loss {:.8f} | Test Top5 {:.4f} | Test Top1 {:.4f}".format(
-                        epoch, loss.item(),testtop5,testtop1)) 
+                perf = self.evaluate(test_levels=test_levels,test_only=True)
+
+                testtop5, testtop1 = perf['Top 5 neighbors']['Share >=1 correct neighbor'], \
+                                        perf['Top 1 neighbors']['Share >=1 correct neighbor']
+
+                testtop5tot, testtop1tot = perf['Top 5 neighbors']['Share of correct neighbors'], \
+                                        perf['Top 1 neighbors']['Share of correct neighbors']
+
+                print("Epoch {:05d} | Loss {:.8f} | Test Top5 {:.4f} | Test Top1 {:.4f} | Test Top5 Total {:.4f} | Test Top1 Total {:.4f} ".format(
+                        epoch, loss.item(),testtop5,testtop1,testtop5tot, testtop1tot))
+
+                perf_history.append(perf)
 
         if return_intermediate_embeddings:
-            return loss_history,top5_history,top1_history,all_embeddings     
+            return loss_history,perf_history,all_embeddings     
         else:
-            return loss_history,top5_history,top1_history
+            return loss_history,perf_history
 
     def start_api(self,*args,**kwargs):
         """Launches a fastapi to query this class in its current state."""
@@ -674,13 +801,17 @@ class SimilarityEmbedder:
 
 
     @classmethod
-    def load(cls, filepath):
+    def load(cls, filepath, device=None, faiss_gpu=None):
         """Restore a previous instance of this class from disk.
 
         Args
         ----
         filepath : str 
-            path on disk to load from"""
+            path on disk to load from
+        device : str
+            optionally override the pytorch device
+        faiss_gpu : str
+            optionally override whether faiss uses gpu"""
 
         with open(f'{filepath}/initargs.pkl','rb') as pklf:
             (embedding_dim,
@@ -691,10 +822,16 @@ class SimilarityEmbedder:
             agg_type,
             distance,
             torch_device,
-            faiss_gpu,
+            faiss_gpu_loaded,
             inference_batch_size,
             p_train,
             train_faiss_index) = pickle.load(pklf)
+
+        if device is not None:
+            torch_device=device
+
+        if faiss_gpu is not None:
+            faiss_gpu_loaded = faiss_gpu
 
         restored_self = cls(embedding_dim,
                             feature_dim,
@@ -704,7 +841,7 @@ class SimilarityEmbedder:
                             agg_type,
                             distance,
                             torch_device,
-                            faiss_gpu,
+                            faiss_gpu_loaded,
                             inference_batch_size,
                             p_train,
                             train_faiss_index)

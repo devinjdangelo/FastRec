@@ -26,11 +26,11 @@ e1,e2 = zip(*g.edges)
 attributes = pd.read_csv('./karate_attributes.csv')
 ```
 
-Then we can initialize an embedder, add the data, and generate node embeddings.
+Then we can initialize a recommender, add the data, and generate node embeddings.
 
 ```python
 from fastrec import GraphRecommender
-#initialize our embedder to embed into 2 dimensions and 
+#initialize our recommender to embed into 2 dimensions and 
 #use euclidan distance as the metric for similarity.
 sage = GraphRecommender(2,distance='l2')
 sage.add_nodes(nodes)
@@ -55,7 +55,7 @@ The trained embeddings much more neatly divide the communities. But what about t
 
 ```python
 epochs, batch_size = 150, 15
-sage.train(epochs, batch_size,unsupervised=True)
+sage.train(epochs, batch_size, unsupervised=True)
 ```
 
 <img src="https://github.com/devinjdangelo/FastRec/blob/master/examples/graphics/unsupervised.gif" alt="drawing" width="600"/>
@@ -66,7 +66,7 @@ What if we have a very large graph which is expensive and slow to train? Often, 
 
 ```python
 sage = GraphRecommender(2,distance='l2',feature_dim=512,hidden_dim=512)
-untrained_embeddings_large =  sage.embeddings
+untrained_embeddings_large = sage.embeddings
 ```
 
 <img src="https://github.com/devinjdangelo/FastRec/blob/master/examples/graphics/untrained_example_large.png" alt="drawing" width="600"/>
@@ -98,7 +98,7 @@ e1, e2 = e1.numpy(), e2.numpy()
 nodes = pd.DataFrame(data.labels,dtype=np.int32,columns=['labels'])
 ```
 
-Now we can set up our embedder. For larger graphs, it will be much faster to use gpu for both torch and faiss computations.
+Now we can set up our recommender. For larger graphs, it will be much faster to use gpu for both torch and faiss computations.
 
 ```python
 from fastrec import GraphRecommender
@@ -158,7 +158,7 @@ import random
 
 ## Save and Load
 
-If you are creating a very large graph (millions of nodes and edges), you will want to save your created graph and model weights to disk, so that you will not have to process the raw edge data or train the embeddings again. You can save and load all of the necessary information to restore your SimilarityEmbedder in a single line. 
+If you are creating a very large graph (millions of nodes and edges), you will want to save your created graph and model weights to disk, so that you will not have to process the raw edge data or train the embeddings again. You can save and load all of the necessary information to restore your GraphRecommeder in a single line. 
 
 ```python
 sage.save('/example/directory')
@@ -169,4 +169,4 @@ You can likewise restore your session in a single line.
 sage = GraphRecommender.load('/example/directory')
 ```
 
-Note that the loading method is a classmethod, so you do not need to initialize a new instance of SimilarityEmbedder to restore from disk. The save and load functionality keeps track of the args you used to initialize the class for you.
+Note that the loading method is a classmethod, so you do not need to initialize a new instance of GraphRecommeder to restore from disk. The save and load functionality keeps track of the args you used to initialize the class for you.

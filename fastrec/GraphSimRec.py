@@ -773,6 +773,7 @@ class GraphRecommender:
         """Launches a fastapi to query this class in its current state."""
         package_path = os.path.dirname(os.path.abspath(__file__))
         production_path = package_path + '/production_model'
+        pathlib.Path(production_path).mkdir(exist_ok=True)
         self.save(production_path)
         #this import cant be at the top level to prevent circular depedency
         from RecAPI import app

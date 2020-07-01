@@ -14,7 +14,7 @@ A dockerfile is included with all dependencies needed. Simply clone the repo, bu
 
 ## Basic Usage: Karate Club Communities
 
-As an example, we can generate embeddings for [Zachary's karate club](https://en.wikipedia.org/wiki/Zachary%27s_karate_club) graph. See [karateclub.py](https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/karateclub.py) for the full script to replicate the below.
+As an example, we can generate embeddings for [Zachary's karate club](https://en.wikipedia.org/wiki/Zachary%27s_karate_club) graph. See [karateclub.py](https://github.com/devinjdangelo/FastRec/blob/master/examples/karateclub.py) for the full script to replicate the below.
 
 First, convert the graph into a node and edgelist format.
 
@@ -41,7 +41,7 @@ untrained_embeddings =  sage.embeddings
 ```
 How do the embeddings look? Even with no training of the graph neural network weights, the embeddings don't do a terrible job  dividing the two communities. The nodes in the Instructor community are blue and the nodes in the Administrator community are red.
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_supervised.png" alt="drawing" width="600"/>
+<img src="https://github.com/devinjdangelo/FastRec/blob/master/examples/graphics/untrained_example_supervised.png" alt="drawing" width="600"/>
 
 With one command, we can improve the embeddings with supervised learning with a triplet loss. 
 
@@ -49,7 +49,7 @@ With one command, we can improve the embeddings with supervised learning with a 
 epochs, batch_size = 150, 15
 sage.train(epochs, batch_size)
 ```
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/supervised.gif" alt="drawing" width="600"/>
+<img src="https://github.com/devinjdangelo/FastRec/blob/master/examples/graphics/supervised.gif" alt="drawing" width="600"/>
 
 The trained embeddings much more neatly divide the communities. But what about the more realistic scenario where we did not know the labels of all of the nodes in advance? We can instead train the embeddings in a fully unsupervised manner.
 
@@ -58,7 +58,7 @@ epochs, batch_size = 150, 15
 sage.train(epochs, batch_size,unsupervised=True)
 ```
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/unsupervised.gif" alt="drawing" width="600"/>
+<img src="https://github.com/devinjdangelo/FastRec/blob/master/examples/graphics/unsupervised.gif" alt="drawing" width="600"/>
 
 In this case, the unsupervised training actually seems to do a slightly better job of dividing the two communities.
 
@@ -69,7 +69,7 @@ sage = GraphRecommender(2,distance='l2',feature_dim=512,hidden_dim=512)
 untrained_embeddings_large =  sage.embeddings
 ```
 
-<img src="https://github.com/devinjdangelo/GraphSimEmbed/blob/master/examples/graphics/untrained_example_large.png" alt="drawing" width="600"/>
+<img src="https://github.com/devinjdangelo/FastRec/blob/master/examples/graphics/untrained_example_large.png" alt="drawing" width="600"/>
 
 This looks nearly as good as the trained version of the small network, but no training was required! 
 

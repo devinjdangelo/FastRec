@@ -775,6 +775,7 @@ class GraphRecommender:
         production_path = package_path + '/production_model'
         pathlib.Path(production_path).mkdir(exist_ok=True)
         self.save(production_path)
+        os.environ['FASTREC_DEPLOY_PATH'] = production_path
         #this import cant be at the top level to prevent circular depedency
         from RecAPI import app
         uvicorn.run(app,*args,**kwargs)

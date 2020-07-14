@@ -10,7 +10,12 @@ The code is intended to be as scalable as possible, with the only limitation bei
 
 ## Installation
 
-A dockerfile is included with all dependencies needed. Simply clone the repo, build the dockerfile, and run the code in the built image. Nvidia docker is needed for gpu support. There is not currently a pip or conda package.
+You can install fastrec itself with pip.
+
+```bash
+pip install fastrec
+```
+This will not install the needed dependencies. Refer to the included dockerfile for a list of other packages needed to run fastrec.
 
 ## Basic Usage: Karate Club Communities
 

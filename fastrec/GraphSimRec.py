@@ -14,7 +14,6 @@ from math import ceil
 import argparse
 import itertools as it
 import tqdm
-import imageio
 import os
 
 import pickle
@@ -744,8 +743,8 @@ class GraphRecommender:
                 self._index = None
                 
 
-                print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f} | Mem+Maxmem {:.3f} / {:.3f}".format(
-                        epoch, step, loss.item(), th.cuda.memory_allocated()/(1024**3),th.cuda.max_memory_allocated()/(1024**3)))
+                print("Epoch {:05d} | Step {:0.1f} | Loss {:.8f}".format(
+                        epoch, step, loss.item()))
             if return_intermediate_embeddings:
                 all_embeddings.append(self.embeddings)
             loss_history.append(loss.item())
@@ -860,7 +859,7 @@ class GraphRecommender:
         with open(f'{filepath}/embed.pkl','rb') as pklf:
             restored_self.embed = pickle.load(pklf)
 
-        restored_self.net.load_state_dict(th.load(f'{filepath}/model_weights.torch'))
+        restored_self.net.load_state_dict(th.load(f'{filepath}/model_weights.torch',map_location=th.device(torch_device)))
 
         return restored_self
 

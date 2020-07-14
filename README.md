@@ -15,7 +15,7 @@ You can install fastrec itself with pip.
 ```bash
 pip install fastrec
 ```
-This will not install the needed dependencies. Refer to the included dockerfile for a list of other packages needed to run fastrec.
+This will install all needed dependencies except for faiss. You can install faiss via conda install -c pytorch faiss-cpu. The base pip installation will also only run on cpu. To run on gpu, use conda to install the relevant cudatoolkit for your system and gpu enabled pytorch and dgl distributions.
 
 ## Basic Usage: Karate Club Communities
 

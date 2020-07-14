@@ -12,8 +12,8 @@ app = FastAPI()
 def startup_event():
 
     global sage
-    package_path = os.path.dirname(os.path.abspath(__file__))
-    sage = GraphRecommender.load(f'{package_path}/production_model/',device='cpu',faiss_gpu=False)
+    deploy_path = os.environ['FASTREC_DEPLOY_PATH']
+    sage = GraphRecommender.load(deploy_path,device='cpu',faiss_gpu=False)
     #force the index to be trained
     sage.train_faiss = True
     sage.index.nprobe = 100

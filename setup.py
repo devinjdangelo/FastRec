@@ -6,4 +6,5 @@ setup(name='fastrec',
 	  url='https://github.com/devinjdangelo/FastRec',
 	  author='Devin DAngelo',
 	  packages=['fastrec'],
+	  scripts=['fastrec/fastrec-deploy'],
 	  zip_safe=False)

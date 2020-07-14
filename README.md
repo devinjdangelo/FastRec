@@ -134,10 +134,10 @@ host, port = 127.0.0.1, 8000
 sage.start_api(host=host,port=port)
 ```
 
-This method of starting the API is convenient but has some downsides in the current implementation. Some data will be duplicated in memory, so if your graph is taking up most of your current memory this deployment may fail. You can avoid this issue by instead using the included deployment script. Simply save your GraphRecommender and point the deployment script to the saved location.
+This method of starting the API is convenient but has some downsides in the current implementation. Some data will be duplicated in memory, so if your graph is taking up most of your current memory this deployment may fail. You can avoid this issue by instead using the included deployment script. Simply save your GraphRecommender and point the deployment script to the saved location. Just like with the previous method, all args are passed along to uvicorn. 
 
 ```bash
-fastrec-deploy /example/directory
+fastrec-deploy /example/directory --host 127.0.0.1 --port 8000
 ```
 
 Now we can query the recommender from any other script on the network.

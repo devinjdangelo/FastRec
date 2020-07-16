@@ -10,12 +10,21 @@ The code is intended to be as scalable as possible, with the only limitation bei
 
 ## Installation
 
-You can install fastrec itself with pip.
+The quickest way to get started is with a cpu only installation with conda.  
 
 ```bash
+conda install -c ddangelo fastrec -c pytorch -c dglteam -c conda-forge
+```
+
+To install for gpu, you will need to manually install dgl and pytorch with gpu support. Then, you can pip install fastrec.
+
+```bash
+conda install pytorch torchvision cudatoolkit=10.0 faiss-gpu -c pytorch
+conda install -c dglteam dgl-cuda10.0
 pip install fastrec
 ```
-This will install all needed dependencies except for faiss. You can install faiss via conda install -c pytorch faiss-cpu. The base pip installation will also only run on cpu. To run on gpu, use conda to install the relevant cudatoolkit for your system and gpu enabled pytorch and dgl distributions.
+
+Note that currently there are only conda builds of faiss for linux and OSX systems. If you are on windows, you might be able to install from source.
 
 ## Basic Usage: Karate Club Communities
 

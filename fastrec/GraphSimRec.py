@@ -386,6 +386,8 @@ class GraphRecommender:
         embeddings node x embedding_dim tensor"""
 
         if self._embeddings is None:
+            if not self._masks_set:
+                self.set_masks()
             print('computing embeddings for all nodes...')
             with th.no_grad():
                 self._embeddings = self.net.inference(
@@ -401,10 +403,9 @@ class GraphRecommender:
         -------
         a faiss index with input embeddings added and optionally trained"""
 
-        if not self._masks_set:
-            self.set_masks()
-
         if self._index is None:
+            if not self._masks_set:
+                self.set_masks()
             if self.distance_metric=='cosine':
                 self._index  = faiss.IndexFlatIP(self.embedding_dim)
                 embeddings = np.copy(self.embeddings[self.entity_mask])
@@ -812,6 +813,28 @@ class GraphRecommender:
 
         with open(f'{filepath}/initargs.pkl','wb') as pklf:
             pickle.dump(self.initargs,pklf)
+
+    def load_graph_data(self,filepath):
+        """Restore graph data from disk, but not network parameters
+        or trained embeddings. Useful for changing network parameters
+        if you don't want to reconstruct the graph.
+
+        Args
+        ----
+        filepath : str
+            path to where you saved previous the GraphRecommender
+        """
+
+        self.G,_ = dgl.data.utils.load_graphs(f'{filepath}/dgl.bin')
+        self.G = restored_self.G[0]
+        self.G.readonly()
+        self.G = dgl.as_heterograph(restored_self.G)
+
+        self.node_ids = pd.read_csv(f'{filepath}/node_ids.csv')
+
+        self._masks_set = False
+        self._embeddings = None 
+        self._index = None 
 
 
     @classmethod

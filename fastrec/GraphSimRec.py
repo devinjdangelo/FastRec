@@ -451,16 +451,18 @@ class GraphRecommender:
         D, I = self.index.search(inputs,k)
         return D,I
 
-    def query_neighbors(self, nodelist, k):
+    def query_neighbors(self, nodelist, k, return_labels=True):
         """For each query node in nodelist, return the k closest neighbors in the 
         embedding space.
 
         Args
         ----
-        nodelist : list of any types castable to stirng
+        nodelist : list
             list of node identifiers to query
         k : int
             number of neighbors to return
+        return_labels : bool
+            if true, includes the node label of all neighbors returned
 
         Returns
         -------
@@ -478,7 +480,7 @@ class GraphRecommender:
 
         inputs = self.embeddings[intids,:]
         D, I = self._search_index(inputs,k)
-        faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask]
+        faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask].tolist()
         I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
         output = {node:{'neighbors':i,'distances':d.tolist()} for node, d, i in zip(nodelist,D,I)}
         return output
@@ -775,7 +777,7 @@ class GraphRecommender:
         pathlib.Path(production_path).mkdir(exist_ok=True)
         self.save(production_path)
         os.environ['FASTREC_DEPLOY_PATH'] = production_path
-        #this import cant be at the top level to prevent circular depedency
+        #this import cant be at the top level to prevent circular dependency
         from RecAPI import app
         uvicorn.run(app,*args,**kwargs)
 
@@ -790,15 +792,16 @@ class GraphRecommender:
         filepath : str 
             path on disk to save files"""
 
-        with open(f'{filepath}/dgl.pkl','wb') as pklf:
-            pickle.dump(self.G,pklf)
+
+        outg = dgl.as_immutable_graph(self.G)
+        dgl.data.utils.save_graphs(f'{filepath}/dgl.bin',outg)
 
         self.node_ids.to_csv(f'{filepath}/node_ids.csv',index=False)
 
-        with open(f'{filepath}/embed.pkl','wb') as pklf:
-            pickle.dump(self.embed,pklf)
-
+        th.save(self.embed,f'{filepath}/embed.torch')
         th.save(self.net.state_dict(),f'{filepath}/model_weights.torch')
+        embeddings = self.embeddings
+        np.save(f'{filepath}/final_embed.npy',embeddings,allow_pickle=False)
 
         with open(f'{filepath}/initargs.pkl','wb') as pklf:
             pickle.dump(self.initargs,pklf)
@@ -850,16 +853,17 @@ class GraphRecommender:
                             p_train,
                             train_faiss_index)
 
-        with open(f'{filepath}/dgl.pkl','rb') as pklf:
-            restored_self.G = pickle.load(pklf)
+        restored_self.G,_ = dgl.data.utils.load_graphs(f'{filepath}/dgl.bin')
+        restored_self.G = restored_self.G[0]
+        restored_self.G.readonly()
+        restored_self.G = dgl.as_heterograph(restored_self.G)
 
         restored_self.node_ids = pd.read_csv(f'{filepath}/node_ids.csv')
-        restored_self.node_ids.id = restored_self.node_ids.id.astype(str) 
 
-        with open(f'{filepath}/embed.pkl','rb') as pklf:
-            restored_self.embed = pickle.load(pklf)
-
+        restored_self.embed = th.load(f'{filepath}/embed.torch',map_location=th.device(torch_device))
         restored_self.net.load_state_dict(th.load(f'{filepath}/model_weights.torch',map_location=th.device(torch_device)))
+        embeddings = np.load(f'{filepath}/final_embed.npy',allow_pickle=False)
+        restored_self._embeddings = embeddings
 
         return restored_self
 

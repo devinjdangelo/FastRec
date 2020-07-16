@@ -24,7 +24,7 @@ def read_root():
     return {"GraphData": sage.G.__str__()}
 
 
-@app.get("/knn/{hashid}/{k}")
+@app.get("/knn/{hashid}")
 def knn(hashid: str, k: int = 5):
     """Returns to nearest k nodes in the graph based on cosine distance using faiss
     Args
@@ -35,7 +35,8 @@ def knn(hashid: str, k: int = 5):
 
     Returns:
     K nearest neighbors and cosine similarities"""
-    return sage.query_neighbors([hashid], k)
+    js = sage.query_neighbors([hashid], k)
+    return js
 
 @app.get("/knn_jacard/{hashid}/{k}")
 def knn_jacard(hashid: str, k: int = 5):

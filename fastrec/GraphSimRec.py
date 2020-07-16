@@ -471,18 +471,24 @@ class GraphRecommender:
         if not self._masks_set:
             self.set_masks()
 
+        relevant_nodes = self.node_ids.loc[self.node_ids.id.isin(nodelist)]
         try:
-            intids = [self.node_ids.loc[self.node_ids.id == node].intID.iloc[0]
+            intids = [relevant_nodes.loc[relevant_nodes.id == node].intID.iloc[0]
                         for node in nodelist]
         except IndexError:
-            intids = [self.node_ids.loc[self.node_ids.id == int(node)].intID.iloc[0]
+            intids = [relevant_nodes.loc[relevant_nodes.id == int(node)].intID.iloc[0]
                         for node in nodelist]
 
         inputs = self.embeddings[intids,:]
         D, I = self._search_index(inputs,k)
         faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask].tolist()
         I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
-        output = {node:{'neighbors':i,'distances':d.tolist()} for node, d, i in zip(nodelist,D,I)}
+        if return_labels:
+            faissid_to_label = self.node_ids.classid.to_numpy()[self.entity_mask].tolist()
+            L = [[faissid_to_label[neighbor] for neighbor in neighbors] for neighbors in I]
+            output = {node:{'neighbors':i,'neighbor labels':l,'distances':d.tolist()} for node, d, i, l in zip(nodelist,D,I,L)}
+        else:
+            output = {node:{'neighbors':i,'distances':d.tolist()} for node, d, i in zip(nodelist,D,I)}
         return output
 
     def evaluate(self, test_levels=[5,1], test_only=False):

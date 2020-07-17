@@ -149,7 +149,7 @@ This method of starting the API is convenient but has some downsides in the curr
 fastrec-deploy /example/directory --host 127.0.0.1 --port 8000
 ```
 
-Now we can query the recommender from any other script on the network.
+Now we can query the recommender from any other script on the network. For detailed API docs, see the /docs endpoint.
 
 ```python
 import requests

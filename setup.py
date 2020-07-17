@@ -5,7 +5,7 @@ def readme():
 		return f.read()
 
 setup(name='fastrec',
-	  version='0.0.3',
+	  version='0.0.4',
 	  description='Rapidly deployed gnn based recommender',
 	  long_description=readme(),
 	  url='https://github.com/devinjdangelo/FastRec',

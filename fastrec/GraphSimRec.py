@@ -452,7 +452,74 @@ class GraphRecommender:
         D, I = self.index.search(inputs,k)
         return D,I
 
-    def query_neighbors(self, nodelist, k, return_labels=True):
+    def _get_intID(self,nodelist):
+        """Accepts a list of nodeids and converts them to internally used
+        sequential integer id. 
+
+        Args
+        ----
+        nodelist : List
+            node identifiers to convert
+            
+        Returns
+        -------
+        list of integer identifiers"""
+
+        relevant_nodes = self.node_ids.loc[self.node_ids.id.isin(nodelist)]
+        try:
+            intids = [relevant_nodes.loc[relevant_nodes.id == node].intID.iloc[0]
+                        for node in nodelist]
+        except IndexError:
+            intids = [relevant_nodes.loc[relevant_nodes.id == int(node)].intID.iloc[0]
+                        for node in nodelist]
+
+        return intids
+
+    def get_embeddings(self,nodelist):
+        """Looks up the embedding for a specific list of nodes based on
+        their nodeid.
+
+        Args
+        ----
+        nodelist : List
+            list of node identifiers to get the embedding of
+
+        Returns
+        -------
+        numpy array of final embeddings"""
+
+        intids = self._get_intID(nodelist)
+        return self.embeddings[intids,:]
+
+    def _faiss_ids_to_nodeids(self, I, return_labels):
+        """Takes an output from faiss index and maps the faissids back to nodeids
+        and optionally node class labels
+
+        Args
+        ----
+        I : numpy array
+            array returned from a faiss index search
+        return_labels : bool
+            whether to lookup labels
+
+        Returns
+        -------
+        I : array with ids mapped to nodeids
+        L : optionally second array with ids mapped to node class labels,
+            if return_labels is false, is None"""
+
+        faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask].tolist()
+        if return_labels:
+            faissid_to_label = self.node_ids.classid.to_numpy()[self.entity_mask].tolist()
+            L = [[faissid_to_label[neighbor] for neighbor in neighbors] for neighbors in I]
+            I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
+        else:
+            I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
+            L = None
+        return I, L
+
+
+    def query_neighbors(self, nodelist, k, return_labels=False):
         """For each query node in nodelist, return the k closest neighbors in the 
         embedding space.
 
@@ -472,24 +539,13 @@ class GraphRecommender:
         if not self._masks_set:
             self.set_masks()
 
-        relevant_nodes = self.node_ids.loc[self.node_ids.id.isin(nodelist)]
-        try:
-            intids = [relevant_nodes.loc[relevant_nodes.id == node].intID.iloc[0]
-                        for node in nodelist]
-        except IndexError:
-            intids = [relevant_nodes.loc[relevant_nodes.id == int(node)].intID.iloc[0]
-                        for node in nodelist]
+        inputs = self.get_embeddings(nodelist)
 
-        inputs = self.embeddings[intids,:]
         D, I = self._search_index(inputs,k)
-        faissid_to_nodeid = self.node_ids.id.to_numpy()[self.entity_mask].tolist()
+        I,L = self._faiss_ids_to_nodeids(I,return_labels)
         if return_labels:
-            faissid_to_label = self.node_ids.classid.to_numpy()[self.entity_mask].tolist()
-            L = [[faissid_to_label[neighbor] for neighbor in neighbors] for neighbors in I]
-            I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
             output = {node:{'neighbors':i,'neighbor labels':l,'distances':d.tolist()} for node, d, i, l in zip(nodelist,D,I,L)}
         else:
-            I = [[faissid_to_nodeid[neighbor] for neighbor in neighbors] for neighbors in I]
             output = {node:{'neighbors':i,'distances':d.tolist()} for node, d, i in zip(nodelist,D,I)}
         return output
 

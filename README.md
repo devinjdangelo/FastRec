@@ -154,7 +154,7 @@ Now we can query the recommender from any other script on the network.
 ```python
 import requests
 #configure url, default is localhost
-apiurl = 'http://127.0.0.1:8000/{}/{}/{}'
+apiurl = 'http://127.0.0.1:8000/knn/{}?k={}'
 example_node = '0'
 k = 10
 r = requests.get(apiurl.format('knn',example_node,k))
